@@ -1,5 +1,7 @@
 # 🧠 Agent Memory (Memory Trail Runtime)
 
+[简体中文](README.zh-CN.md) | English
+
 > A local-first, agent-centric memory layer for macOS.
 
 Agent Memory is a **Memory Trail Runtime** designed to bridge the gap between raw computer usage and agentic intelligence. It observes your daily activities, consolidates them into meaningful "Dream" episodes, and provides explainable recall for AI agents.
