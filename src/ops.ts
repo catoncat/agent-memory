@@ -548,15 +548,30 @@ function logs(args: string[]) {
 
 function installWrappers() {
   const targets = [path.join(HOME, ".agents", "bin"), path.join(HOME, ".local", "bin")];
+  const bins = {
+    "agent-memory": path.join(ROOT, "src", "main.ts"),
+    "agent-memory-ops": path.join(ROOT, "src", "ops.ts"),
+    "agent-memory-ui": path.join(ROOT, "src", "ui-server.ts"),
+    "agent-recall": path.join(ROOT, "src", "recall.ts"),
+  };
   for (const dir of targets) {
     mkdirSync(dir, { recursive: true });
-    const target = path.join(dir, "agent-memory-ops");
-    try {
-      if (existsSync(target)) unlinkSync(target);
-      symlinkSync(THIS_FILE, target);
-    } catch (err) {
-      console.error(`failed to install wrapper ${target}: ${err instanceof Error ? err.message : String(err)}`);
-      process.exitCode = 2;
+    for (const [name, source] of Object.entries(bins)) {
+      const target = path.join(dir, name);
+      try {
+        if (existsSync(target)) {
+          const stats = statSync(target);
+          if (stats.isSymbolicLink() || stats.isFile()) {
+            unlinkSync(target);
+          }
+        }
+        // Create a small shim instead of a direct symlink if we want to ensure 'bun' is used
+        const shim = `#!/bin/sh\nexec bun ${source} "$@"\n`;
+        writeFileSync(target, shim, { mode: 0o755 });
+      } catch (err) {
+        console.error(`failed to install wrapper ${target}: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 2;
+      }
     }
   }
 }
