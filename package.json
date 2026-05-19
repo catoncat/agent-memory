@@ -1,0 +1,30 @@
+{
+  "name": "agent-memory",
+  "version": "0.1.0",
+  "description": "A local memory layer for agentic recall and continuity.",
+  "type": "module",
+  "bin": {
+    "agent-memory": "./src/main.ts",
+    "agent-memory-ops": "./src/ops.ts",
+    "agent-memory-ui": "./src/ui-server.ts",
+    "agent-memory-index": "./src/index-cli.ts",
+    "agent-recall": "./src/recall.ts"
+  },
+  "scripts": {
+    "heartbeat": "bun src/ops.ts heartbeat",
+    "status": "bun src/ops.ts status",
+    "ui": "bun src/ui-server.ts",
+    "install": "bun src/ops.ts install",
+    "install-wrappers": "bun src/ops.ts install-wrappers"
+  },
+  "dependencies": {
+    "bun-types": "latest",
+    "better-sqlite3": "^11.0.0",
+    "sqlite-vec": "0.1.7-alpha.2",
+    "zod": "^3.23.8",
+    "ai": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
