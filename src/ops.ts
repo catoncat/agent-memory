@@ -17,6 +17,12 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import {
+  DEFAULT_OBSERVE_INTERVAL_SECONDS,
+  buildMetrics,
+  planFullPipeline,
+} from "./lib/ops-runtime";
+
 type JsonRecord = Record<string, unknown>;
 
 type CommandResult = {
@@ -43,14 +49,14 @@ const LOCK_DIR = path.join(RUNTIME_DIR, "heartbeat.lock");
 const LOG_DIR = path.join(HOME, "Library", "Logs", "agent-memory");
 const LABEL = process.env.AGENT_MEMORY_LAUNCHD_LABEL || "com.envvar.agent-memory-heartbeat";
 const PLIST_PATH = path.join(HOME, "Library", "LaunchAgents", `${LABEL}.plist`);
-const DEFAULT_INTERVAL_SECONDS = 1800;
+const DEFAULT_INTERVAL_SECONDS = DEFAULT_OBSERVE_INTERVAL_SECONDS;
 
 function usage(exitCode = 0): never {
   const text = `Usage:
   agent-memory-ops heartbeat [--json]
   agent-memory-ops status [--json] [--live]
   agent-memory-ops metrics
-  agent-memory-ops install [--interval-seconds 1800]
+  agent-memory-ops install [--interval-seconds 60]
   agent-memory-ops uninstall
   agent-memory-ops kick
   agent-memory-ops logs [--lines 80]
@@ -209,47 +215,8 @@ function extractStats(doctorJson: unknown): JsonRecord {
   };
 }
 
-function buildMetrics(status: JsonRecord): string {
-  const stats = (status.stats || {}) as JsonRecord;
-  const lastRunAt = Date.parse(String(status.finishedAt || status.startedAt || "")) / 1000;
-  const ok = status.ok ? 1 : 0;
-  const lines = [
-    "# HELP agent_memory_last_run_timestamp_seconds Unix timestamp of the last heartbeat.",
-    "# TYPE agent_memory_last_run_timestamp_seconds gauge",
-    `agent_memory_last_run_timestamp_seconds ${Number.isFinite(lastRunAt) ? Math.floor(lastRunAt) : 0}`,
-    "# HELP agent_memory_last_run_ok Whether the last heartbeat completed successfully.",
-    "# TYPE agent_memory_last_run_ok gauge",
-    `agent_memory_last_run_ok ${ok}`,
-    "# HELP agent_memory_run_duration_ms Last heartbeat duration in milliseconds.",
-    "# TYPE agent_memory_run_duration_ms gauge",
-    `agent_memory_run_duration_ms ${Number(status.durationMs || 0)}`,
-    "# HELP agent_memory_events_total Total memory events.",
-    "# TYPE agent_memory_events_total gauge",
-    `agent_memory_events_total ${Number(stats.total || 0)}`,
-    "# HELP agent_memory_fts_rows FTS index rows.",
-    "# TYPE agent_memory_fts_rows gauge",
-    `agent_memory_fts_rows ${Number(stats.ftsRows || 0)}`,
-    "# HELP agent_memory_semantic_rows Events with current semantic index rows.",
-    "# TYPE agent_memory_semantic_rows gauge",
-    `agent_memory_semantic_rows ${Number(stats.semanticRows || 0)}`,
-    "# HELP agent_memory_jsonl_files JSONL recovery files.",
-    "# TYPE agent_memory_jsonl_files gauge",
-    `agent_memory_jsonl_files ${Number(stats.jsonlFiles || 0)}`,
-    "# HELP agent_memory_size_kb Memory root size in KiB.",
-    "# TYPE agent_memory_size_kb gauge",
-    `agent_memory_size_kb ${Number(stats.sizeKb || 0)}`,
-    "# HELP agent_memory_capability_count Capability manifest count.",
-    "# TYPE agent_memory_capability_count gauge",
-    `agent_memory_capability_count ${Number(stats.capabilityCount || 0)}`,
-    "# HELP agent_memory_raw_events_total Total raw trail events.",
-    "# TYPE agent_memory_raw_events_total gauge",
-    `agent_memory_raw_events_total ${Number(((stats.trail || {}) as JsonRecord).rawEvents || 0)}`,
-    "# HELP agent_memory_signals_total Total trail signal rows.",
-    "# TYPE agent_memory_signals_total gauge",
-    `agent_memory_signals_total ${Number(((stats.trail || {}) as JsonRecord).signals || 0)}`,
-    "",
-  ];
-  return lines.join("\n");
+function previousStats(status: JsonRecord | null): JsonRecord {
+  return status?.stats && typeof status.stats === "object" ? (status.stats as JsonRecord) : {};
 }
 
 async function writeRun(status: JsonRecord) {
@@ -277,44 +244,101 @@ async function runHeartbeat(): Promise<JsonRecord> {
 
   const started = Date.now();
   const startedAt = nowIso();
+  const previousStatus = readStatus();
+  const fullPipelinePlan = planFullPipeline(previousStatus);
+  const steps: JsonRecord = {};
+
+  const observeStartedAt = nowIso();
   const observe = runJsonCommand("agent-memory", ["observe", "--json", "--timeout-ms", "4000"], 20_000);
-  const refresh = runJsonCommand(
-    "agent-memory",
-    [
-      "refresh",
-      "--since-hours",
-      "24",
-      "--limit-files",
-      "40",
-      "--x-limit",
-      "100",
-      "--tab-limit",
-      "100",
-      "--timeout-ms",
-      "4000",
-    ],
-    60_000,
-  );
-  const dream = runJsonCommand("agent-memory", ["dream", "--since-hours", "24", "--limit", "240"], 60_000);
-  const embed = runJsonCommand("agent-memory", ["embed", "--local", "--limit", "200"], 60_000);
-  const doctor = runJsonCommand("agent-memory", ["doctor", "--json"], 30_000);
+  const observeFinishedAt = nowIso();
+  steps.observe = compactCommandResult(observe);
+
+  const observeStatus = {
+    lastStartedAt: observeStartedAt,
+    lastFinishedAt: observeFinishedAt,
+    lastOk: observe.ok,
+    durationMs: observe.durationMs,
+  };
+
+  let stats = previousStats(previousStatus);
+  let fullPipeline: JsonRecord;
+  let fullPipelineSkipped: JsonRecord | undefined;
+  let heartbeatOk = observe.ok;
+
+  if (fullPipelinePlan.shouldRun) {
+    const fullPipelineStartedMs = Date.now();
+    const fullPipelineStartedAt = nowIso();
+    const refresh = runJsonCommand(
+      "agent-memory",
+      [
+        "refresh",
+        "--since-hours",
+        "24",
+        "--limit-files",
+        "40",
+        "--x-limit",
+        "100",
+        "--tab-limit",
+        "100",
+        "--timeout-ms",
+        "4000",
+      ],
+      60_000,
+    );
+    const dream = runJsonCommand("agent-memory", ["dream", "--since-hours", "24", "--limit", "240"], 60_000);
+    const embed = runJsonCommand("agent-memory", ["embed", "--local", "--limit", "200"], 60_000);
+    const doctor = runJsonCommand("agent-memory", ["doctor", "--json"], 30_000);
+    const fullPipelineFinishedAt = nowIso();
+    const fullPipelineOk =
+      refresh.ok && dream.ok && embed.ok && doctor.ok && Boolean((doctor.json as JsonRecord | undefined)?.ok);
+
+    steps.refresh = compactCommandResult(refresh);
+    steps.dream = compactCommandResult(dream);
+    steps.embed = compactCommandResult(embed);
+    steps.doctor = compactCommandResult(doctor);
+    stats = extractStats(doctor.json);
+    heartbeatOk = observe.ok && fullPipelineOk;
+    fullPipeline = {
+      intervalSeconds: fullPipelinePlan.intervalSeconds,
+      skipped: false,
+      lastStartedAt: fullPipelineStartedAt,
+      lastFinishedAt: fullPipelineFinishedAt,
+      lastOk: fullPipelineOk,
+      durationMs: Date.now() - fullPipelineStartedMs,
+      nextDueAt: new Date(Date.parse(fullPipelineFinishedAt) + fullPipelinePlan.intervalSeconds * 1000).toISOString(),
+    };
+  } else {
+    fullPipelineSkipped = {
+      reason: fullPipelinePlan.skippedReason,
+      nextDueAt: fullPipelinePlan.nextDueAt,
+    };
+    fullPipeline = {
+      intervalSeconds: fullPipelinePlan.intervalSeconds,
+      skipped: true,
+      skippedReason: fullPipelinePlan.skippedReason,
+      lastStartedAt: fullPipelinePlan.lastStartedAt,
+      lastFinishedAt: fullPipelinePlan.lastFinishedAt,
+      lastOk: fullPipelinePlan.lastOk,
+      durationMs: fullPipelinePlan.durationMs,
+      nextDueAt: fullPipelinePlan.nextDueAt,
+    };
+    heartbeatOk = observe.ok && fullPipelinePlan.lastOk !== false;
+  }
 
   const status: JsonRecord = {
     kind: "agent-memory-heartbeat",
     label: LABEL,
-    ok:
-      observe.ok && refresh.ok && dream.ok && embed.ok && doctor.ok && Boolean((doctor.json as JsonRecord | undefined)?.ok),
+    ok: heartbeatOk,
     startedAt,
     finishedAt: nowIso(),
     durationMs: Date.now() - started,
-    steps: {
-      observe: compactCommandResult(observe),
-      refresh: compactCommandResult(refresh),
-      dream: compactCommandResult(dream),
-      embed: compactCommandResult(embed),
-      doctor: compactCommandResult(doctor),
-    },
-    stats: extractStats(doctor.json),
+    lastObserveAt: observeStatus.lastFinishedAt,
+    lastFullPipelineAt: fullPipeline.lastFinishedAt,
+    observe: observeStatus,
+    fullPipeline,
+    fullPipelineSkipped,
+    steps,
+    stats,
     runtime: {
       memoryRoot: MEMORY_ROOT,
       statusPath: STATUS_PATH,
@@ -394,8 +418,16 @@ function summarizeStatus(status: JsonRecord | null, launchd: JsonRecord) {
     return;
   }
   const stats = (status.stats || {}) as JsonRecord;
+  const observe = (status.observe || {}) as JsonRecord;
+  const fullPipeline = (status.fullPipeline || {}) as JsonRecord;
+  const skipped = (status.fullPipelineSkipped || {}) as JsonRecord;
   console.log(`agent-memory ops: ${status.ok ? "ok" : "needs_attention"}`);
   console.log(`last_run: ${status.finishedAt || status.startedAt} (${status.durationMs || 0}ms)`);
+  console.log(`last_observe: ${observe.lastFinishedAt || "unknown"} (${observe.durationMs || 0}ms)`);
+  console.log(
+    `full_pipeline: last=${fullPipeline.lastFinishedAt || "never"} ok=${String(fullPipeline.lastOk ?? "unknown")} next=${fullPipeline.nextDueAt || "unknown"}`,
+  );
+  if (skipped.reason) console.log(`full_pipeline_skipped: ${skipped.reason}`);
   console.log(
     `memory: events=${stats.total || 0} fts=${stats.ftsRows || 0} semantic=${stats.semanticRows || 0} size=${stats.sizeKb || 0}KiB`,
   );
@@ -489,7 +521,7 @@ function guiTarget(): string {
 
 function install(args: string[]) {
   ensureRuntimeDirs();
-  const intervalSeconds = Math.max(300, argNumber(args, "--interval-seconds", DEFAULT_INTERVAL_SECONDS));
+  const intervalSeconds = Math.max(DEFAULT_INTERVAL_SECONDS, argNumber(args, "--interval-seconds", DEFAULT_INTERVAL_SECONDS));
   writeFileSync(PLIST_PATH, plist(intervalSeconds), "utf8");
   spawnSync("launchctl", ["bootout", guiTarget(), PLIST_PATH], { stdio: "ignore" });
   const bootstrap = spawnSync("launchctl", ["bootstrap", guiTarget(), PLIST_PATH], {
