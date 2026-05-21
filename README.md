@@ -11,8 +11,8 @@ Agent Memory is a **Memory Trail Runtime** designed to bridge the gap between ra
 ## ✨ Features
 
 - **🛡️ Privacy First**: Everything stays local. FTS and semantic embeddings run on your machine.
-- **👁️ Low-Cost Observation**: Captures macOS foreground state, active Chrome tabs, and developer sessions without heavy screen recording.
-- **🌙 Dream Pipeline**: Automatically consolidates raw activity trails into high-level episodic memories using a heartbeat process.
+- **👁️ Low-Cost Observation**: Captures macOS foreground state, active Chrome tabs, and developer sessions with a lightweight 60-second observe loop.
+- **🌙 Dream Pipeline**: Automatically consolidates raw activity trails into high-level episodic memories on a low-frequency 30-minute throttle.
 - **🔍 Semantic Recall**: Provides agents with structured context, reasons for matching, and evidence links.
 - **📊 Observability**: Comes with a built-in UI to visualize your memory trails and system health.
 
@@ -35,8 +35,10 @@ bun run src/ops.ts install-wrappers
 Install the `launchd` service to keep the memory engine running in the background:
 
 ```bash
-agent-memory-ops install
+agent-memory-ops install --interval-seconds 60
 ```
+
+The daemon does not wait 30 minutes to observe activity. Every 60-second heartbeat records the current usage trail, while heavier refresh, Dream, local embedding, and doctor work is throttled to roughly every 30 minutes.
 
 ### 3. Usage
 Check the status of your memory engine:

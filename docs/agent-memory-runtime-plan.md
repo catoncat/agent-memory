@@ -33,7 +33,7 @@ One-shot and scheduled capture of current usage state:
 - active Chrome tab URL/title
 - later: keyframe screenshot, OCR, copy/search/download/save hooks
 
-The observer is event-driven or low-frequency. It must not become a busy watcher.
+The observer is lightweight and scheduled frequently enough to be useful: the launchd heartbeat runs every 60 seconds and performs one observe pass. It must not become a busy watcher.
 
 ### Raw Trail Store
 
@@ -82,7 +82,7 @@ Observability console:
 - Trail: recent raw events and scores
 - Dream: episodes and decay candidates
 - Recall: query, match reason, evidence
-- Health: heartbeat, storage, index, doctor
+- Health: heartbeat, observe cadence, full-pipeline cadence, storage, index, doctor
 
 ## MVP Scope
 
@@ -92,7 +92,7 @@ Observability console:
 2. Runtime schema for `raw_events`, `artifacts`, `signals`, `episodes`, and `memories`.
 3. Dwell/session state for active focus.
 4. Signal rows for dwell, active focus, observed count, and score.
-5. Heartbeat calls observer before refresh/dream/embed/doctor.
+5. Heartbeat calls observer every 60 seconds, but only runs refresh/dream/embed/doctor when the 30-minute full-pipeline throttle is due.
 6. Doctor verifies trail schema and observer state.
 
 ### Build Next
@@ -114,6 +114,8 @@ Observability console:
 ## Resource Budgets
 
 - Observer one-shot target: under 300 ms when permissions are healthy.
+- Launchd cadence: 60-second light observe heartbeat.
+- Full pipeline cadence: refresh -> dream -> embed --local -> doctor at most once every 30 minutes.
 - Heartbeat target: under 60 seconds total.
 - Idle CPU: no persistent busy process.
 - Memory root target for MVP: under 200 MB.
@@ -125,5 +127,5 @@ Observability console:
 - Repeated observe calls on same focus increase dwell and observed count.
 - `agent-memory stats` includes observer events.
 - `agent-memory doctor --json` reports trail schema and observer state checks.
-- `agent-memory-ops status --live --json` includes observer, refresh, dream, embed, doctor.
+- `agent-memory-ops status --live --json` includes last observe state, last full-pipeline state, next full-pipeline due time, or a `fullPipelineSkipped` reason.
 - `agent-context "<current task>" --semantic --local` can recall relevant trail or Dream evidence.
