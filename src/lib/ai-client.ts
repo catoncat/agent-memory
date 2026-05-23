@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { loadConfig } from "./config";
 
 export type AiTaskType =
   | "extract"
@@ -42,14 +43,8 @@ export interface ChatResult {
   raw: unknown;
 }
 
-const DEFAULTS: AiClientConfig = {
-  baseUrl: "https://ai.chen.rs/v1",
-  apiKey: "",
-  modelFast: "gemini-2.5-flash-lite",
-  modelBalanced: "gpt5.2",
-  modelStrong: "gpt5.2",
-  timeoutMs: 30000,
-};
+// DEFAULTS are now managed via loadConfig() in ./config.ts
+
 
 const FAST_TASKS = new Set<AiTaskType>([
   "extract",
@@ -70,18 +65,9 @@ function sanitizeApiKey(raw: string | undefined): string {
 }
 
 export function loadAiConfig(overrides: Partial<AiClientConfig> = {}): AiClientConfig {
-  const apiKey =
-    sanitizeApiKey(process.env.AI_API_KEY) ||
-    sanitizeApiKey(process.env.OPENAI_API_KEY) ||
-    "";
-
+  const config = loadConfig();
   return {
-    baseUrl: process.env.AI_BASE_URL || process.env.OPENAI_API_BASE || DEFAULTS.baseUrl,
-    apiKey,
-    modelFast: process.env.AI_MODEL_FAST || DEFAULTS.modelFast,
-    modelBalanced: process.env.AI_MODEL_BALANCED || process.env.AI_MODEL || DEFAULTS.modelBalanced,
-    modelStrong: process.env.AI_MODEL_STRONG || DEFAULTS.modelStrong,
-    timeoutMs: Number.parseInt(process.env.AI_TIMEOUT_MS || `${DEFAULTS.timeoutMs}`, 10),
+    ...config.ai,
     ...overrides,
   };
 }
@@ -179,37 +165,15 @@ function normalizeBaseUrl(raw: string): string {
 }
 
 function getGeminiEmbedConfig() {
-  const baseUrl = normalizeBaseUrl(process.env.GEMINI_API_BASE || DEFAULT_GEMINI_API_BASE);
-  const model = (process.env.GEMINI_EMBED_MODEL || DEFAULT_GEMINI_EMBED_MODEL).trim();
-  const outputDimensionality = Number.parseInt(
-    process.env.GEMINI_EMBED_DIMENSION || String(DEFAULT_GEMINI_EMBED_DIMENSION),
-    10,
-  );
-  const configuredBatchSize = Number.parseInt(
-    process.env.GEMINI_EMBED_BATCH_SIZE || String(DEFAULT_GEMINI_EMBED_BATCH_SIZE),
-    10,
-  );
-  const configuredItemsPerMinute = Number.parseInt(
-    process.env.GEMINI_EMBED_ITEMS_PER_MINUTE || String(DEFAULT_GEMINI_EMBED_ITEMS_PER_MINUTE),
-    10,
-  );
-  const itemsPerMinute = Number.isFinite(configuredItemsPerMinute)
-    ? Math.max(1, configuredItemsPerMinute)
-    : DEFAULT_GEMINI_EMBED_ITEMS_PER_MINUTE;
-  const batchSize = Number.isFinite(configuredBatchSize)
-    ? Math.max(1, Math.min(configuredBatchSize, itemsPerMinute, 100))
-    : Math.min(DEFAULT_GEMINI_EMBED_BATCH_SIZE, itemsPerMinute);
-  const modelPath = `models/${model}`;
+  const config = loadConfig();
   return {
-    baseUrl,
-    model,
-    modelPath,
-    outputDimensionality: Number.isFinite(outputDimensionality)
-      ? outputDimensionality
-      : DEFAULT_GEMINI_EMBED_DIMENSION,
-    batchSize,
-    itemsPerMinute,
-    batchUrl: `${baseUrl}/v1beta/${modelPath}:batchEmbedContents`,
+    baseUrl: "https://generativelanguage.googleapis.com", // Hardcoded as Gemini API base
+    model: config.gemini.embedModel,
+    modelPath: `models/${config.gemini.embedModel}`,
+    outputDimensionality: config.gemini.embedDimension,
+    batchSize: 50,
+    itemsPerMinute: 55,
+    batchUrl: `https://generativelanguage.googleapis.com/v1beta/models/${config.gemini.embedModel}:batchEmbedContents`,
   };
 }
 
@@ -462,11 +426,8 @@ export async function embedQuery(
 }
 
 function getGeminiApiKeys(override?: string): string[] {
-  const raw = override || process.env.GEMINI_API_KEYS || process.env.GEMINI_API_KEY || "";
-  return raw
-    .split(/[,\n]/)
-    .map((key) => key.trim())
-    .filter(Boolean);
+  if (override) return override.split(/[,\n]/).map(k => k.trim()).filter(Boolean);
+  return loadConfig().gemini.apiKeys;
 }
 
 async function pickGeminiKeyState<T extends {

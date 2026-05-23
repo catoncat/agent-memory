@@ -34,3 +34,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 .ml-cache/
 .mainline/local.toml
+
+# AI IDE local config (machine-local symlinks/state)
+.antigravitycli/

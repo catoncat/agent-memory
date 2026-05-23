@@ -7,7 +7,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const ROOT = path.resolve(import.meta.dir, "..");
-const STATIC_DIR = path.join(import.meta.dir, "agent-memory-ui");
+const STATIC_DIR = path.join(ROOT, "ui");
 const MEMORY_ROOT = process.env.AGENT_MEMORY_ROOT || path.join(homedir(), ".agents", "memory");
 const EVENT_DB = path.join(MEMORY_ROOT, "indexes", "events.sqlite");
 const STATUS_PATH = path.join(MEMORY_ROOT, "runtime", "status.json");

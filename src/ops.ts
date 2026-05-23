@@ -286,7 +286,7 @@ async function runHeartbeat(): Promise<JsonRecord> {
       60_000,
     );
     const dream = runJsonCommand("agent-memory", ["dream", "--since-hours", "24", "--limit", "240"], 60_000);
-    const embed = runJsonCommand("agent-memory", ["embed", "--local", "--limit", "200"], 60_000);
+    const embed = runJsonCommand("agent-memory", ["embed", "--limit", "200", "--wait"], 60_000);
     const doctor = runJsonCommand("agent-memory", ["doctor", "--json"], 30_000);
     const fullPipelineFinishedAt = nowIso();
     const fullPipelineOk =

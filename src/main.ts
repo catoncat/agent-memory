@@ -8,7 +8,7 @@ import { appendFile, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
-import { embed, embedQuery } from "./lib/ai-client";
+import { chat, chatJson, embed, embedQuery } from "./lib/ai-client";
 
 type EventInput = {
   ts: string;
@@ -65,9 +65,6 @@ const DB_PATH = path.join(MEMORY_ROOT, "indexes", "events.sqlite");
 const EVENT_DIR = path.join(MEMORY_ROOT, "events");
 const DEFAULT_CODEX_ROOT = path.join(homedir(), ".codex", "sessions");
 const X_BOOKMARK_DB = path.join(process.cwd(), "tools", "data", "opencli-twitter", "bookmarks.sqlite");
-const LOCAL_EMBED_MODEL = "local-hash-v1";
-const LOCAL_EMBED_DIMENSIONS = 384;
-
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/\bAIza[0-9A-Za-z_-]{20,}\b/g, "[REDACTED_GOOGLE_API_KEY]"],
   [/\bsk-[0-9A-Za-z_-]{20,}\b/g, "[REDACTED_API_KEY]"],
@@ -287,9 +284,25 @@ function ensureTrailSchema(db: Database) {
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_signals_name_score ON signals(name, score)");
   db.run(`
+    CREATE TABLE IF NOT EXISTS salience_feedback (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL,
+      target_kind TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT '',
+      app TEXT NOT NULL DEFAULT '',
+      signal TEXT NOT NULL,
+      delta REAL NOT NULL DEFAULT 0,
+      note TEXT NOT NULL DEFAULT '',
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_salience_feedback_bucket ON salience_feedback(source, app)");
+  db.run(`
     CREATE TABLE IF NOT EXISTS episodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source_id TEXT NOT NULL UNIQUE,
+      thread_id TEXT REFERENCES episode_threads(id),
       start_ts TEXT NOT NULL,
       end_ts TEXT NOT NULL,
       title TEXT NOT NULL,
@@ -299,6 +312,23 @@ function ensureTrailSchema(db: Database) {
       metadata_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    )
+  `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS episode_threads (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      main_app TEXT NOT NULL DEFAULT '',
+      count INTEGER NOT NULL DEFAULT 0,
+      centroid_json TEXT,
+      event_ids TEXT NOT NULL DEFAULT '[]',
+      start_ts TEXT,
+      end_ts TEXT,
+      merged_into TEXT REFERENCES episode_threads(id),
+      score REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      closed_at TEXT
     )
   `);
   db.run(`
@@ -1436,7 +1466,7 @@ function directorySizeKb(dir: string): number | null {
 
 function secretScanHits(): string[] {
   try {
-    const raw = execFileSync("rg", ["-l", SECRET_SCAN_PATTERN, MEMORY_ROOT], {
+    const raw = execFileSync("rg", ["-l", SECRET_SCAN_PATTERN, MEMORY_ROOT, "--iglob", "!config.json"], {
       encoding: "utf8",
       timeout: 5000,
     });
@@ -1557,11 +1587,26 @@ function doctor(args: string[]) {
       detail: processes.length ? processes.map((p) => `${p.pid}:${p.command}`).join(" | ").slice(0, 500) : "none",
     },
   ];
+
+  // Episode status
+  const episodeStats = (() => {
+    try {
+      const localDb = openDb();
+      const threadCount = (localDb.query("SELECT COUNT(*) as c FROM episode_threads").get() as { c: number })?.c || 0;
+      const episodeCount = (localDb.query("SELECT COUNT(*) as c FROM episodes").get() as { c: number })?.c || 0;
+      const openThreads = (localDb.query("SELECT COUNT(*) as c FROM episode_threads WHERE status = 'open'").get() as { c: number })?.c || 0;
+      localDb.close();
+      return { threads: threadCount, episodes: episodeCount, openThreads };
+    } catch {
+      return { threads: 0, episodes: 0, openThreads: 0 };
+    }
+  })();
   const ok = checks.every((check) => check.ok);
   const output = {
     ok,
     memoryRoot: MEMORY_ROOT,
     stats: currentStats,
+    episodeStats,
     jsonl,
     sizeKb,
     capabilities,
@@ -1574,6 +1619,7 @@ function doctor(args: string[]) {
     for (const check of checks) {
       console.log(`${check.ok ? "ok" : "fail"}\t${check.name}\t${check.detail}`);
     }
+    console.log(`info\tepisode_stats\tthreads=${episodeStats.threads} episodes=${episodeStats.episodes} open_threads=${episodeStats.openThreads}`);
   }
   if (!ok) process.exitCode = 2;
 }
@@ -1676,8 +1722,7 @@ function searchRows(db: Database, query: string, limit: number): EventSearchRow[
     .all(like, like, like, like, like, limit) as EventSearchRow[];
 }
 
-function embeddingModelName(local = false): string {
-  if (local) return LOCAL_EMBED_MODEL;
+function embeddingModelName(): string {
   return (process.env.GEMINI_EMBED_MODEL || "gemini-embedding-2").trim();
 }
 
@@ -1710,51 +1755,6 @@ function eventEmbeddingText(row: {
     .filter(Boolean)
     .join("\n")
     .slice(0, 6000);
-}
-
-function hashFeature(feature: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < feature.length; i += 1) {
-    hash ^= feature.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function addLocalFeature(vector: number[], feature: string, weight: number) {
-  if (!feature) return;
-  const hash = hashFeature(feature);
-  const index = hash % vector.length;
-  const sign = hash & 0x80000000 ? -1 : 1;
-  vector[index] += sign * weight;
-}
-
-function localHashVector(text: string): number[] {
-  const vector = Array.from({ length: LOCAL_EMBED_DIMENSIONS }, () => 0);
-  const normalized = text
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}_-]+/gu, " ")
-    .trim();
-  const tokens = normalized.match(/[\p{L}\p{N}_-]+/gu)?.slice(0, 700) || [];
-
-  for (const token of tokens) {
-    addLocalFeature(vector, `tok:${token}`, 2);
-  }
-  for (let i = 0; i < tokens.length - 1; i += 1) {
-    addLocalFeature(vector, `bi:${tokens[i]} ${tokens[i + 1]}`, 3);
-  }
-
-  const compact = Array.from(normalized.replace(/\s+/g, "")).slice(0, 2500);
-  for (const size of [2, 3, 4]) {
-    for (let i = 0; i <= compact.length - size; i += 1) {
-      addLocalFeature(vector, `ng${size}:${compact.slice(i, i + size).join("")}`, size === 2 ? 0.5 : 1);
-    }
-  }
-
-  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
-  if (!norm) return vector;
-  return vector.map((value) => Number((value / norm).toFixed(8)));
 }
 
 function cosineSimilarity(a: number[], b: number[]): number {
@@ -1852,8 +1852,7 @@ function search(args: string[]) {
 async function embedEvents(args: string[]): Promise<CommandStats> {
   const limit = argNumber(args, "--limit", 25);
   const force = hasFlag(args, "--force");
-  const useLocal = hasFlag(args, "--local");
-  const model = embeddingModelName(useLocal);
+  const model = embeddingModelName();
   const db = openDb();
   const rows = db
     .query(
@@ -1890,39 +1889,6 @@ async function embedEvents(args: string[]): Promise<CommandStats> {
 
   let embeddedCount = 0;
   let lastError = "";
-  if (useLocal) {
-    const now = new Date().toISOString();
-    const tx = db.transaction(() => {
-      for (const row of rows) {
-        const vector = localHashVector(eventEmbeddingText(row));
-        db.run(
-          `
-          INSERT INTO event_embeddings (event_id, model, content_hash, dimensions, vector_json, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(event_id, model) DO UPDATE SET
-            content_hash = excluded.content_hash,
-            dimensions = excluded.dimensions,
-            vector_json = excluded.vector_json,
-            updated_at = excluded.updated_at
-        `,
-          [row.id, model, row.content_hash, vector.length, JSON.stringify(vector), now],
-        );
-        embeddedCount += 1;
-      }
-    });
-    tx();
-    db.close();
-    const stats = collectStats();
-    const output = {
-      source: "agent-memory-embed",
-      model,
-      scanned: rows.length,
-      embedded: embeddedCount,
-      stats,
-    };
-    console.log(JSON.stringify(output, null, 2));
-    return output;
-  }
 
   try {
     await embed(rows.map(eventEmbeddingText), {
@@ -2079,19 +2045,30 @@ type DreamInputRow = {
   app: string | null;
   tags_json: string;
   metadata_json: string;
+  vector_json: string | null;
 };
 
-type DreamEpisode = {
-  key: string;
-  title: string;
+type DreamSegment = {
+  eventIds: number[];
+  mainApp: string;
   start: string;
   end: string;
   count: number;
+  centroid: number[] | null;
   score: number;
-  sources: string[];
-  kinds: string[];
-  urls: string[];
-  titles: string[];
+};
+
+type DreamThread = {
+  id: string;
+  label: string;
+  mainApp: string;
+  eventIds: number[];
+  start: string;
+  end: string;
+  count: number;
+  centroid: number[] | null;
+  score: number;
+  status: "open" | "closed" | "merged";
 };
 
 function parseStringArray(raw: string): string[] {
@@ -2113,25 +2090,7 @@ function hostFromUrl(raw: string | null): string {
   }
 }
 
-function baseName(raw: string | null): string {
-  if (!raw) return "";
-  const parts = raw.split("/").filter(Boolean);
-  return compactLine(parts.at(-1) || raw, 80);
-}
-
-function dreamAnchor(row: DreamInputRow): { key: string; title: string } {
-  const host = hostFromUrl(row.url);
-  if (row.source === "codex") {
-    const project = baseName(row.cwd) || "Codex";
-    return { key: `codex:${project}`, title: `Codex: ${project}` };
-  }
-  if (row.source === "agent-closeout") return { key: "closeout", title: "Task closeouts" };
-  if (host) return { key: `web:${host}`, title: host };
-  const source = row.source || "memory";
-  return { key: `${source}:${row.kind}`, title: `${source} / ${row.kind}` };
-}
-
-function rowSalience(row: DreamInputRow): number {
+function rowSalience(row: DreamInputRow, learned?: Map<string, number>): number {
   const tags = parseStringArray(row.tags_json);
   let score = 1;
   if (tags.includes("active")) score += 4;
@@ -2144,49 +2103,242 @@ function rowSalience(row: DreamInputRow): number {
   if (row.content.length > 800) score += 2;
   if (hostFromUrl(row.url)) score += 1;
   if (row.source === "chrome-tabs" && !tags.includes("active")) score -= 0.5;
+  if (learned) {
+    const app = eventApp(row);
+    score +=
+      learned.get(`${row.source}|${app}`) ??
+      learned.get(`*|${app}`) ??
+      learned.get(`${row.source}|*`) ??
+      0;
+  }
   return Math.max(0.1, score);
 }
 
-function makeDreamEpisodes(rows: DreamInputRow[], maxEpisodes = 10): DreamEpisode[] {
-  const episodes = new Map<string, DreamEpisode>();
-  for (const row of rows) {
-    const anchor = dreamAnchor(row);
-    const existing =
-      episodes.get(anchor.key) ||
-      ({
-        key: anchor.key,
-        title: anchor.title,
-        start: row.ts,
-        end: row.ts,
-        count: 0,
-        score: 0,
-        sources: [],
-        kinds: [],
-        urls: [],
-        titles: [],
-      } satisfies DreamEpisode);
-    existing.start = existing.start < row.ts ? existing.start : row.ts;
-    existing.end = existing.end > row.ts ? existing.end : row.ts;
-    existing.count += 1;
-    existing.score += rowSalience(row);
-    if (!existing.sources.includes(row.source)) existing.sources.push(row.source);
-    if (!existing.kinds.includes(row.kind)) existing.kinds.push(row.kind);
-    const url = row.url || "";
-    if (url && existing.urls.length < 5 && !existing.urls.includes(url)) existing.urls.push(url);
-    const title = compactLine(row.title || row.summary || url, 140);
-    if (title && existing.titles.length < 8 && !existing.titles.includes(title)) existing.titles.push(title);
-    episodes.set(anchor.key, existing);
+function eventApp(row: DreamInputRow): string {
+  if (row.app) return row.app;
+  const host = hostFromUrl(row.url);
+  if (host) return host;
+  return row.source;
+}
+
+function centroidOf(vectors: number[][]): number[] | null {
+  if (vectors.length === 0) return null;
+  const dims = vectors[0].length;
+  const sum = new Array(dims).fill(0);
+  for (const vec of vectors) {
+    for (let i = 0; i < dims; i++) sum[i] += vec[i];
   }
-  return Array.from(episodes.values())
-    .sort((a, b) => b.score - a.score || b.count - a.count || b.end.localeCompare(a.end))
-    .slice(0, maxEpisodes)
-    .map((episode) => ({ ...episode, score: Number(episode.score.toFixed(2)) }));
+  return sum.map((v) => v / vectors.length);
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  const len = Math.min(a.length, b.length);
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < len; i += 1) {
+    const av = a[i] || 0;
+    const bv = b[i] || 0;
+    dot += av * bv;
+    normA += av * av;
+    normB += bv * bv;
+  }
+  if (!normA || !normB) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// ── Step 1: Deterministic Segmentation ──
+
+function segmentByApp(events: DreamInputRow[], learned?: Map<string, number>): DreamSegment[] {
+  const segments: DreamSegment[] = [];
+  let current: DreamInputRow[] = [];
+
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (current.length === 0) {
+      current.push(ev);
+      continue;
+    }
+    const prev = current[current.length - 1];
+    const prevApp = eventApp(prev);
+    const curApp = eventApp(ev);
+    const timeGapMs = new Date(ev.ts).getTime() - new Date(prev.ts).getTime();
+    const timeGapMin = timeGapMs / 60000;
+
+    if (prevApp !== curApp) {
+      segments.push(buildSegment(current, learned));
+      current = [ev];
+      continue;
+    }
+
+    if (timeGapMin > 30) {
+      segments.push(buildSegment(current, learned));
+      current = [ev];
+      continue;
+    }
+
+    current.push(ev);
+  }
+
+  if (current.length > 0) {
+    segments.push(buildSegment(current, learned));
+  }
+
+  return segments;
+}
+
+function buildSegment(events: DreamInputRow[], learned?: Map<string, number>): DreamSegment {
+  const ids = events.map((e) => e.id);
+  const vectors = events
+    .map((e) => {
+      try {
+        return e.vector_json ? JSON.parse(e.vector_json) : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((v): v is number[] => v !== null);
+
+  let score = 0;
+  for (const ev of events) score += rowSalience(ev, learned);
+
+  return {
+    eventIds: ids,
+    mainApp: eventApp(events[0]),
+    start: events[0].ts,
+    end: events[events.length - 1].ts,
+    count: events.length,
+    centroid: centroidOf(vectors),
+    score: Number(score.toFixed(1)),
+  };
+}
+
+// ── Step 2: Embedding Merge ──
+
+function mergeSegments(segments: DreamSegment[]): DreamSegment[] {
+  if (segments.length <= 1) return segments;
+
+  const merged: DreamSegment[] = [];
+  let current = segments[0];
+
+  for (let i = 1; i < segments.length; i++) {
+    const next = segments[i];
+    let shouldMerge = false;
+
+    if (current.mainApp !== next.mainApp) {
+      merged.push(current);
+      current = next;
+      continue;
+    }
+
+    if (current.centroid && next.centroid) {
+      const cos = cosineSimilarity(current.centroid, next.centroid);
+      const timeGapMs = new Date(next.start).getTime() - new Date(current.end).getTime();
+      const timeGapMin = timeGapMs / 60000;
+
+      if (cos > 0.95) shouldMerge = true;
+      if (cos > 0.90 && timeGapMin < 5) shouldMerge = true;
+    }
+
+    if (shouldMerge) {
+      current.eventIds.push(...next.eventIds);
+      current.end = next.end;
+      current.count += next.count;
+      current.score = Number((current.score + next.score).toFixed(1));
+      if (current.centroid && next.centroid) {
+        const dims = current.centroid.length;
+        const total = current.count + next.count;
+        const avg = new Array(dims).fill(0);
+        for (let j = 0; j < dims; j++) {
+          avg[j] = (current.centroid[j] * current.count + next.centroid[j] * next.count) / total;
+        }
+        current.centroid = avg;
+      }
+    } else {
+      merged.push(current);
+      current = next;
+    }
+  }
+
+  merged.push(current);
+  return merged;
+}
+
+// ── Step 3: Thread Assignment ──
+
+function assignToThreads(segments: DreamSegment[], existingThreads: DreamThread[]): DreamThread[] {
+  const threads = [...existingThreads];
+  const now = new Date().toISOString();
+
+  for (const seg of segments) {
+    let bestMatch: DreamThread | null = null;
+    let bestScore = 0;
+
+    for (const thread of threads) {
+      if (thread.status !== "open") continue;
+
+      let combined = 0;
+      const appMatch = seg.mainApp === thread.mainApp ? 1 : 0;
+      combined += appMatch * 0.5;
+
+      const threadEndMs = new Date(thread.end).getTime();
+      const segStartMs = new Date(seg.start).getTime();
+      const timeDeltaMin = (segStartMs - threadEndMs) / 60000;
+      const timeClose = timeDeltaMin >= 0 && timeDeltaMin <= 30 ? 1 : 0;
+      combined += timeClose * 0.2;
+
+      if (seg.centroid && thread.centroid) {
+        const cos = cosineSimilarity(seg.centroid, thread.centroid);
+        combined += cos * 0.3;
+      }
+
+      if (combined > bestScore) {
+        bestScore = combined;
+        bestMatch = thread;
+      }
+    }
+
+    if (bestMatch && bestScore > 0.5) {
+      bestMatch.eventIds.push(...seg.eventIds);
+      bestMatch.count += seg.count;
+      bestMatch.score = Number((bestMatch.score + seg.score).toFixed(1));
+      if (seg.end > bestMatch.end) bestMatch.end = seg.end;
+      if (seg.start < bestMatch.start) bestMatch.start = seg.start;
+
+      if (seg.centroid && bestMatch.centroid) {
+        const dims = seg.centroid.length;
+        const total = bestMatch.count + seg.count;
+        const avg = new Array(dims).fill(0);
+        for (let j = 0; j < dims; j++) {
+          avg[j] = (bestMatch.centroid[j] * bestMatch.count + seg.centroid[j] * seg.count) / total;
+        }
+        bestMatch.centroid = avg;
+      }
+    } else {
+      const threadId = `thread:${now.slice(0, 10)}:${seg.mainApp}:${threads.length}`;
+      threads.push({
+        id: threadId,
+        label: seg.mainApp,
+        mainApp: seg.mainApp,
+        eventIds: [...seg.eventIds],
+        start: seg.start,
+        end: seg.end,
+        count: seg.count,
+        centroid: seg.centroid ? [...seg.centroid] : null,
+        score: seg.score,
+        status: "open",
+      });
+    }
+  }
+
+  return threads;
 }
 
 function buildDreamContent(params: {
   sinceHours: number;
   scanned: number;
-  episodes: DreamEpisode[];
+  segments: DreamSegment[];
+  threads: DreamThread[];
   decayCandidates: number;
   bySource: Array<{ source: string; count: number }>;
 }): string {
@@ -2195,20 +2347,24 @@ function buildDreamContent(params: {
     ``,
     `Window: last ${params.sinceHours}h`,
     `Input events: ${params.scanned}`,
-    `Episodes: ${params.episodes.length}`,
+    `Segments: ${params.segments.length}`,
+    `Threads: ${params.threads.length} (open=${params.threads.filter((t) => t.status === "open").length}, closed=${params.threads.filter((t) => t.status === "closed").length})`,
     `Low-signal raw events that can decay: ${params.decayCandidates}`,
     ``,
     `## Source Mix`,
     ...params.bySource.map((item) => `- ${item.source}: ${item.count}`),
     ``,
-    `## Episodes`,
-    ...params.episodes.flatMap((episode, index) => [
-      `${index + 1}. ${episode.title}`,
-      `   - score: ${episode.score}; events: ${episode.count}; time: ${episode.start} -> ${episode.end}`,
-      `   - sources: ${episode.sources.join(", ")}; kinds: ${episode.kinds.join(", ")}`,
-      ...episode.titles.slice(0, 4).map((title) => `   - ${title}`),
-      ...episode.urls.slice(0, 2).map((url) => `   - ${url}`),
-    ]),
+    `## Segments`,
+    ...params.segments.map((seg, i) => {
+      const timeRange = `${seg.start.slice(5, 19)} → ${seg.end.slice(11, 19)}`;
+      return `${i + 1}. [${seg.mainApp}] ${seg.count} events, score=${seg.score}, ${timeRange}`;
+    }),
+    ``,
+    `## Threads`,
+    ...params.threads.map((thr, i) => {
+      const timeRange = `${thr.start.slice(5, 19)} → ${thr.end.slice(11, 19)}`;
+      return `${i + 1}. [${thr.label}] (${thr.status}) ${thr.count} events, score=${thr.score}, ${timeRange}`;
+    }),
     ``,
     `## Forget Policy`,
     `- Keep this dream episode as the durable memory.`,
@@ -2218,53 +2374,353 @@ function buildDreamContent(params: {
   return lines.join("\n");
 }
 
+// ── Salience feedback (P1: correction loop) ──
+
+const SIGNAL_DELTA: Record<string, number> = {
+  boost: 2,
+  demote: -2,
+  "wrong-summary": -1,
+  split: -1.5,
+  merge: 1,
+};
+
+// Aggregate corrections into per-(source,app) salience nudges.
+// Half-life decay (14d) so recent corrections dominate; clamp ±4 so a few
+// signals can't overwhelm the hardcoded baseline — convergence, not override.
+function loadLearnedWeights(db: Database): Map<string, number> {
+  const rows = db
+    .query("SELECT source, app, delta, ts FROM salience_feedback")
+    .all() as Array<{ source: string; app: string; delta: number; ts: string }>;
+  const now = Date.now();
+  const halfLifeDays = 14;
+  const acc = new Map<string, number>();
+  for (const r of rows) {
+    const ageDays = (now - new Date(r.ts).getTime()) / 86400000;
+    const weight = r.delta * Math.pow(0.5, ageDays / halfLifeDays);
+    const exact = `${r.source}|${r.app}`;
+    const wildcard = `${r.source}|*`;
+    acc.set(exact, (acc.get(exact) ?? 0) + weight);
+    acc.set(wildcard, (acc.get(wildcard) ?? 0) + weight * 0.5);
+  }
+  for (const [k, v] of acc) acc.set(k, Math.max(-4, Math.min(4, v)));
+  return acc;
+}
+
+async function correct(args: string[]) {
+  const target = args[0];
+  const signal = args[1];
+  if (!target || !signal || !(signal in SIGNAL_DELTA)) {
+    console.error(
+      `usage: agent-memory correct <thread:..|episode:..|eventId> <${Object.keys(SIGNAL_DELTA).join("|")}> [--delta N] [--note "..."]`,
+    );
+    usage(1);
+  }
+  const note = argValue(args, "--note", "");
+  const deltaRaw = argValue(args, "--delta", "");
+  const delta = deltaRaw ? Number(deltaRaw) : SIGNAL_DELTA[signal];
+  if (!Number.isFinite(delta)) usage(1);
+
+  const db = openDb();
+  let kind = "event";
+  let source = "";
+  let app = "";
+
+  if (target.startsWith("thread:")) {
+    kind = "thread";
+    source = "*"; // thread is app-siloed → nudge the whole app bucket
+    const t = db.query("SELECT main_app FROM episode_threads WHERE id = ?").get(target) as
+      | { main_app: string }
+      | null;
+    if (!t) {
+      console.error(`thread not found: ${target}`);
+      usage(1);
+    }
+    app = t!.main_app ?? "";
+  } else if (target.startsWith("episode:")) {
+    kind = "episode";
+    source = "*"; // episode rolls up a thread → app-wide nudge
+    const e = db.query("SELECT metadata_json FROM episodes WHERE source_id = ?").get(target) as
+      | { metadata_json: string }
+      | null;
+    if (!e) {
+      console.error(`episode not found: ${target}`);
+      usage(1);
+    }
+    try {
+      app = String(JSON.parse(e!.metadata_json)?.mainApp ?? "");
+    } catch {
+      app = "";
+    }
+  } else {
+    const e = db.query("SELECT source, app FROM events WHERE id = ?").get(Number(target)) as
+      | { source: string; app: string | null }
+      | null;
+    if (!e) {
+      console.error(`event not found: ${target}`);
+      usage(1);
+    }
+    source = e!.source ?? "";
+    app = e!.app ?? "";
+  }
+
+  db.run(
+    `INSERT INTO salience_feedback (ts, target_kind, target_id, source, app, signal, delta, note, metadata_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [new Date().toISOString(), kind, target, source, app, signal, delta, note, "{}"],
+  );
+
+  console.log(
+    JSON.stringify({ ok: true, target, kind, signal, delta, bucket: `${source}|${app}` }, null, 2),
+  );
+}
+
 async function dream(args: string[]) {
   const sinceHours = Math.max(1, argNumber(args, "--since-hours", 24));
   const limit = Math.max(20, Math.min(1000, argNumber(args, "--limit", 240)));
   const dryRun = hasFlag(args, "--dry-run");
   const cutoff = new Date(Date.now() - sinceHours * 60 * 60 * 1000).toISOString();
+  const embedModel = embeddingModelName();
   const db = openDb();
+
   const rows = db
     .query(
       `
-      SELECT id, ts, source, kind, title, summary, content, url, cwd, app, tags_json, metadata_json
-      FROM events
-      WHERE ts >= ?
-        AND source NOT IN ('agent-dream')
-      ORDER BY ts ASC
+      SELECT e.id, e.ts, e.source, e.kind, e.title, e.summary, e.content, e.url, e.cwd, e.app, e.tags_json, e.metadata_json,
+             ee.vector_json
+      FROM events e
+      LEFT JOIN event_embeddings ee ON ee.event_id = e.id AND ee.model = ? AND ee.content_hash = e.content_hash
+      WHERE e.ts >= ?
+        AND e.source NOT IN ('agent-dream')
+      ORDER BY e.ts ASC
       LIMIT ?
     `,
     )
-    .all(cutoff, limit) as DreamInputRow[];
+    .all(embedModel, cutoff, limit) as DreamInputRow[];
 
-  const episodes = makeDreamEpisodes(rows);
+  const dbThreads = db
+    .query(
+      `SELECT id, label, status, main_app, count, centroid_json, event_ids, start_ts, end_ts, score, created_at, closed_at
+       FROM episode_threads
+       WHERE status = 'open'
+       ORDER BY end_ts DESC`,
+    )
+    .all() as Array<{
+    id: string;
+    label: string;
+    status: string;
+    main_app: string;
+    count: number;
+    centroid_json: string | null;
+    event_ids: string;
+    start_ts: string | null;
+    end_ts: string | null;
+    score: number;
+    created_at: string;
+    closed_at: string | null;
+  }>;
+
+  const existingThreads: DreamThread[] = dbThreads.map((t) => ({
+    id: t.id,
+    label: t.label,
+    mainApp: t.main_app,
+    eventIds: JSON.parse(t.event_ids || "[]"),
+    start: t.start_ts || t.created_at,
+    end: t.end_ts || t.created_at,
+    count: t.count,
+    centroid: (() => {
+      try {
+        return t.centroid_json ? JSON.parse(t.centroid_json) : null;
+      } catch {
+        return null;
+      }
+    })(),
+    score: t.score,
+    status: t.status as "open" | "closed" | "merged",
+  }));
+
+  const learned = loadLearnedWeights(db);
+  const rawSegments = segmentByApp(rows, learned);
+  const mergedSegments = mergeSegments(rawSegments);
+  const threads = assignToThreads(mergedSegments, existingThreads);
+
+  // Close stale threads (> 2h no activity)
+  const now = new Date();
+  const nowIso = now.toISOString();
+  for (const thread of threads) {
+    if (thread.status !== "open") continue;
+    const threadEnd = new Date(thread.end);
+    const idleHours = (now.getTime() - threadEnd.getTime()) / 3600000;
+    if (idleHours > 2) thread.status = "closed";
+  }
+
+  // ── Step 4: LLM Episode Summary for closed threads ──
+  const episodes: Array<{ threadId: string; title: string; summary: string; score: number }> = [];
+  const existingEpisodeThreadIds = new Set(
+    (db.query(`SELECT thread_id FROM episodes WHERE thread_id IS NOT NULL`).all() as Array<{ thread_id: string }>).map(
+      (r) => r.thread_id,
+    ),
+  );
+
+  // Build a lookup of event details for closed threads
+  const closedThreadsForSummary = threads.filter(
+    (t) => t.status === "closed" && t.count >= 3 && !existingEpisodeThreadIds.has(t.id),
+  );
+
+  if (closedThreadsForSummary.length > 0 && !dryRun) {
+    // Fetch event details per thread per-thread (avoid huge IN clause)
+    const getEvents = db.prepare(`SELECT id, source, kind, title, summary, url, ts FROM events WHERE id = ?`);
+
+    for (const thread of closedThreadsForSummary) {
+      const eventIds = thread.eventIds.slice(0, 50); // cap at 50 most recent events
+      const threadEvents: Array<{
+        id: number;
+        source: string;
+        kind: string;
+        title: string;
+        summary: string;
+        url: string | null;
+        ts: string;
+      }> = [];
+
+      for (const id of eventIds) {
+        const row = getEvents.get(id) as { id: number; source: string; kind: string; title: string; summary: string; url: string | null; ts: string } | undefined;
+        if (row) threadEvents.push(row);
+      }
+
+      if (threadEvents.length < 3) continue;
+
+      const titles = threadEvents.map((e) => `  - [${e.source}] ${e.title || e.url || "(no title)"}`).slice(0, 15);
+      const timeRange = `${thread.start.slice(0, 16)} → ${thread.end.slice(0, 16)}`;
+
+      try {
+        const { data } = await chatJson<{ title: string; summary: string }>(
+          [
+            {
+              role: "system",
+              content:
+                "You are an activity summarizer. Given a list of events from a user's computer session, produce a concise episode title (≤8 words) and a one-sentence summary (≤30 words) that captures what they were doing. Respond in JSON: { \"title\": string, \"summary\": string }",
+            },
+            {
+              role: "user",
+              content: `App: ${thread.mainApp}\nTime: ${timeRange}\nEvents (${threadEvents.length}):\n${titles.join("\n")}`,
+            },
+          ],
+          { model: "gpt-5.4-mini", temperature: 0.2 },
+        );
+
+        episodes.push({
+          threadId: thread.id,
+          title: data.title,
+          summary: data.summary,
+          score: thread.score,
+        });
+      } catch (err) {
+        console.error(`LLM summary failed for ${thread.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  // Write episodes to DB
+  const upsertEpisode = db.prepare(`
+    INSERT INTO episodes (source_id, thread_id, start_ts, end_ts, title, summary, score, evidence_json, metadata_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const episodeList: Array<{ threadId: string; title: string; summary: string; score: number }> = [];
+
+  for (const ep of episodes) {
+    const thread = threads.find((t) => t.id === ep.threadId);
+    if (!thread) continue;
+    try {
+      upsertEpisode.run(
+        `episode:${thread.id}`,
+        thread.id,
+        thread.start,
+        thread.end,
+        ep.title,
+        ep.summary,
+        ep.score,
+        JSON.stringify(thread.eventIds),
+        JSON.stringify({ mainApp: thread.mainApp, eventCount: thread.count }),
+        nowIso,
+        nowIso,
+      );
+      episodeList.push(ep);
+    } catch (err) {
+      console.error(`Episode INSERT failed for ${ep.threadId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Persist threads
+  const upsertThread = db.prepare(`
+    INSERT INTO episode_threads (id, label, status, main_app, count, centroid_json, event_ids, start_ts, end_ts, score, created_at, closed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      status = excluded.status,
+      count = excluded.count,
+      centroid_json = excluded.centroid_json,
+      event_ids = excluded.event_ids,
+      start_ts = excluded.start_ts,
+      end_ts = excluded.end_ts,
+      score = excluded.score,
+      closed_at = excluded.closed_at
+  `);
+
+  for (const thread of threads) {
+    const existing = dbThreads.find((t) => t.id === thread.id);
+    upsertThread.run(
+      thread.id,
+      thread.label,
+      thread.status,
+      thread.mainApp,
+      thread.count,
+      thread.centroid ? JSON.stringify(thread.centroid) : null,
+      JSON.stringify(thread.eventIds),
+      thread.start,
+      thread.end,
+      thread.score,
+      existing?.created_at || nowIso,
+      thread.status === "closed" ? nowIso : null,
+    );
+  }
+
   const decayCandidates = rows.filter((row) => row.source === "chrome-tabs" && rowSalience(row) <= 1.5).length;
   const bySource = Array.from(
     rows.reduce((map, row) => map.set(row.source, (map.get(row.source) || 0) + 1), new Map<string, number>()),
   )
     .map(([source, count]) => ({ source, count }))
     .sort((a, b) => b.count - a.count);
-  const now = new Date().toISOString();
-  const sourceId = `dream:${now.slice(0, 10)}`;
-  const content = buildDreamContent({ sinceHours, scanned: rows.length, episodes, decayCandidates, bySource });
+
+  const sourceId = `dream:${nowIso.slice(0, 10)}`;
+  const content = buildDreamContent({
+    sinceHours,
+    scanned: rows.length,
+    segments: mergedSegments,
+    threads,
+    decayCandidates,
+    bySource,
+  });
+
   let result: "insert" | "update" | "skip" | "dry-run" = "dry-run";
   if (!dryRun && rows.length > 0) {
     result = await upsertEvent(db, {
-      ts: now,
+      ts: nowIso,
       source: "agent-dream",
       sourceId,
       kind: "memory_episode",
-      title: `Dream: ${now.slice(0, 10)} usage trail`,
-      summary: `Consolidated ${rows.length} trail events into ${episodes.length} episodes; ${decayCandidates} low-signal raw events can decay.`,
+      title: `Dream: ${nowIso.slice(0, 10)} usage trail`,
+      summary: `Segmented ${rows.length} trail events into ${mergedSegments.length} segments, ${threads.length} threads (${threads.filter((t) => t.status === "open").length} open, ${threads.filter((t) => t.status === "closed").length} closed); generated ${episodeList.length} episode summaries; ${decayCandidates} low-signal raw events can decay.`,
       content,
       app: "Agent Memory",
       sensitivity: "private",
-      tags: ["dream", "trail", "memory", "consolidated"],
+      tags: ["dream", "trail", "memory", "episode_segmentation"],
       metadata: {
         sinceHours,
         inputEvents: rows.length,
+        segments: mergedSegments.length,
+        threads: threads.length,
+        openThreads: threads.filter((t) => t.status === "open").length,
+        closedThreads: threads.filter((t) => t.status === "closed").length,
         decayCandidates,
-        episodes,
         bySource,
       },
     });
@@ -2277,7 +2733,21 @@ async function dream(args: string[]) {
         source: "agent-memory-dream",
         sinceHours,
         scanned: rows.length,
-        episodes,
+        segments: mergedSegments.length,
+        threads: threads.map((t) => ({
+          id: t.id,
+          label: t.label,
+          status: t.status,
+          count: t.count,
+          score: t.score,
+          time: `${t.start.slice(5, 19)} → ${t.end.slice(11, 19)}`,
+        })),
+        episodes: episodeList.map((e) => ({
+          threadId: e.threadId,
+          title: e.title,
+          summary: e.summary,
+          score: e.score,
+        })),
         decayCandidates,
         result,
         sourceId,
@@ -2305,11 +2775,8 @@ async function context(args: string[]) {
   let semanticModel = "";
   if (hasFlag(args, "--semantic")) {
     try {
-      const useLocal = hasFlag(args, "--local");
-      semanticModel = embeddingModelName(useLocal);
-      const queryVec = useLocal
-        ? localHashVector(query)
-        : await embedQuery(query, { timeoutMs: argNumber(args, "--timeout-ms", 30000) });
+      semanticModel = embeddingModelName();
+      const queryVec = await embedQuery(query, { timeoutMs: argNumber(args, "--timeout-ms", 30000) });
       rows = mergeContextRows(rows, semanticRows(db, queryVec, Math.max(limit, limit * 2), semanticModel), limit);
     } catch (err) {
       semanticError = compactLine(err instanceof Error ? err.message : String(err), 320);
@@ -2330,7 +2797,6 @@ async function context(args: string[]) {
           ? {
               enabled: true,
               model: semanticModel || undefined,
-              local: hasFlag(args, "--local") || undefined,
               error: semanticError || undefined,
             }
           : { enabled: false },
@@ -2402,6 +2868,7 @@ async function main() {
   if (cmd === "context") return context(args);
   if (cmd === "observe") return observe(args);
   if (cmd === "dream") return dream(args);
+  if (cmd === "correct") return correct(args);
   if (cmd === "capture") return capture(args);
   if (cmd === "closeout") return closeout(args);
   if (cmd === "add") return addManual(args);
