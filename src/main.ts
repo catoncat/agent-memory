@@ -89,6 +89,8 @@ function usage(exitCode = 0): never {
   agent-memory context "query" [--limit 6] [--refresh] [--semantic] [--local]
   agent-memory observe [--json] [--timeout-ms 5000]
   agent-memory dream [--since-hours 24] [--limit 240] [--dry-run]
+  agent-memory correct <thread:..|episode:..|eventId> <boost|demote|wrong-summary|split|merge> [--delta N] [--note "..."]
+  agent-memory links [--limit 20]
   agent-memory embed [--limit 25] [--force] [--wait] [--local]
   agent-memory capture --title "..." [--summary "..."] [--content "..."] [--tag tag] [--stdin]
   agent-memory closeout --title "..." [--summary "..."] [--content "..."] [--status success] [--stdin]
@@ -298,6 +300,23 @@ function ensureTrailSchema(db: Database) {
     )
   `);
   db.run("CREATE INDEX IF NOT EXISTS idx_salience_feedback_bucket ON salience_feedback(source, app)");
+  db.run(`
+    CREATE TABLE IF NOT EXISTS thread_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      src_thread TEXT NOT NULL,
+      dst_thread TEXT NOT NULL,
+      relation TEXT NOT NULL DEFAULT 'cross-surface',
+      similarity REAL NOT NULL DEFAULT 0,
+      time_gap_min REAL NOT NULL DEFAULT 0,
+      src_app TEXT NOT NULL DEFAULT '',
+      dst_app TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(src_thread, dst_thread)
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_thread_links_src ON thread_links(src_thread)");
+  db.run("CREATE INDEX IF NOT EXISTS idx_thread_links_dst ON thread_links(dst_thread)");
   db.run(`
     CREATE TABLE IF NOT EXISTS episodes (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2341,6 +2360,7 @@ function buildDreamContent(params: {
   threads: DreamThread[];
   decayCandidates: number;
   bySource: Array<{ source: string; count: number }>;
+  crossLinks: ThreadLink[];
 }): string {
   const lines = [
     `# Agent Memory Dream`,
@@ -2365,6 +2385,13 @@ function buildDreamContent(params: {
       const timeRange = `${thr.start.slice(5, 19)} → ${thr.end.slice(11, 19)}`;
       return `${i + 1}. [${thr.label}] (${thr.status}) ${thr.count} events, score=${thr.score}, ${timeRange}`;
     }),
+    ``,
+    `## Cross-Surface Links (${params.crossLinks.length})`,
+    ...(params.crossLinks.length === 0
+      ? [`- (none this cycle)`]
+      : params.crossLinks.map(
+          (l) => `- [${l.srcApp}] ↔ [${l.dstApp}] sim=${l.similarity}, gap=${l.gapMin}min`,
+        )),
     ``,
     `## Forget Policy`,
     `- Keep this dream episode as the durable memory.`,
@@ -2472,6 +2499,119 @@ async function correct(args: string[]) {
   console.log(
     JSON.stringify({ ok: true, target, kind, signal, delta, bucket: `${source}|${app}` }, null, 2),
   );
+}
+
+// ── Cross-surface synthesis (P2: central gardener) ──
+// dream's segmentation/merge is app-siloed by design; this second pass links
+// threads ACROSS different apps when they're semantically related and
+// temporally adjacent — turning the per-surface thread list into a graph.
+
+const CROSS_SIM_MIN = 0.85; // centroid cosine floor for a cross-surface link
+const CROSS_GAP_MAX_MIN = 30; // max idle gap between the two threads' intervals
+const CROSS_TOPK_PER_THREAD = 3; // cap links per thread (embedding is anisotropic; rank locally)
+
+function intervalGapMin(aStart: string, aEnd: string, bStart: string, bEnd: string): number {
+  const as = new Date(aStart).getTime();
+  const ae = new Date(aEnd).getTime();
+  const bs = new Date(bStart).getTime();
+  const be = new Date(bEnd).getTime();
+  if (ae >= bs && be >= as) return 0; // overlapping intervals
+  if (be < as) return (as - be) / 60000;
+  return (bs - ae) / 60000;
+}
+
+interface ThreadLink {
+  src: string;
+  dst: string;
+  srcApp: string;
+  dstApp: string;
+  similarity: number;
+  gapMin: number;
+}
+
+function synthesizeCrossSurface(threads: DreamThread[]): ThreadLink[] {
+  const usable = threads.filter((t) => t.centroid && t.centroid.length > 0);
+
+  // 1) candidate cross-app pairs passing the similarity + time-gap filters
+  const candidates: ThreadLink[] = [];
+  for (let i = 0; i < usable.length; i++) {
+    for (let j = i + 1; j < usable.length; j++) {
+      const a = usable[i];
+      const b = usable[j];
+      if (a.mainApp === b.mainApp) continue; // cross-surface only
+      const sim = cosineSimilarity(a.centroid!, b.centroid!);
+      if (sim < CROSS_SIM_MIN) continue;
+      const gap = intervalGapMin(a.start, a.end, b.start, b.end);
+      if (gap > CROSS_GAP_MAX_MIN) continue;
+      // deterministic src/dst order so UNIQUE(src,dst) stays stable
+      const [src, dst] = a.id < b.id ? [a, b] : [b, a];
+      candidates.push({
+        src: src.id,
+        dst: dst.id,
+        srcApp: src.mainApp,
+        dstApp: dst.mainApp,
+        similarity: Number(sim.toFixed(4)),
+        gapMin: Number(gap.toFixed(1)),
+      });
+    }
+  }
+
+  // 2) keep a link only if it ranks in the top-K (by similarity) of at least one
+  //    endpoint. gemini-embedding-2 is anisotropic so absolute cosine is a weak
+  //    discriminator; local ranking caps graph density on busy sessions.
+  const byThread = new Map<string, ThreadLink[]>();
+  for (const l of candidates) {
+    for (const id of [l.src, l.dst]) {
+      const list = byThread.get(id) ?? [];
+      list.push(l);
+      byThread.set(id, list);
+    }
+  }
+  const keep = new Set<string>();
+  for (const list of byThread.values()) {
+    list.sort((x, y) => y.similarity - x.similarity);
+    for (const l of list.slice(0, CROSS_TOPK_PER_THREAD)) keep.add(`${l.src}|${l.dst}`);
+  }
+  return candidates.filter((l) => keep.has(`${l.src}|${l.dst}`));
+}
+
+function persistThreadLinks(db: Database, links: ThreadLink[]): void {
+  if (links.length === 0) return;
+  const now = new Date().toISOString();
+  const stmt = db.prepare(`
+    INSERT INTO thread_links (src_thread, dst_thread, relation, similarity, time_gap_min, src_app, dst_app, created_at, updated_at)
+    VALUES (?, ?, 'cross-surface', ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(src_thread, dst_thread) DO UPDATE SET
+      similarity = excluded.similarity,
+      time_gap_min = excluded.time_gap_min,
+      src_app = excluded.src_app,
+      dst_app = excluded.dst_app,
+      updated_at = excluded.updated_at
+  `);
+  const tx = db.transaction(() => {
+    for (const l of links) {
+      stmt.run(l.src, l.dst, l.similarity, l.gapMin, l.srcApp, l.dstApp, now, now);
+    }
+  });
+  tx();
+}
+
+async function links(args: string[]) {
+  const limit = argNumber(args, "--limit", 20);
+  const db = openDb();
+  const rows = db
+    .query(
+      `SELECT l.src_thread, l.dst_thread, l.src_app, l.dst_app, l.similarity, l.time_gap_min, l.updated_at,
+              s.label AS src_label, d.label AS dst_label
+       FROM thread_links l
+       LEFT JOIN episode_threads s ON s.id = l.src_thread
+       LEFT JOIN episode_threads d ON d.id = l.dst_thread
+       ORDER BY l.updated_at DESC
+       LIMIT ?`,
+    )
+    .all(limit);
+  db.close();
+  console.log(JSON.stringify(rows, null, 2));
 }
 
 async function dream(args: string[]) {
@@ -2683,6 +2823,11 @@ async function dream(args: string[]) {
     );
   }
 
+  // P2: cross-surface synthesis — link related threads across different apps
+  // into a graph (central gardener). Runs after threads are persisted.
+  const crossLinks = synthesizeCrossSurface(threads);
+  if (!dryRun) persistThreadLinks(db, crossLinks);
+
   const decayCandidates = rows.filter((row) => row.source === "chrome-tabs" && rowSalience(row) <= 1.5).length;
   const bySource = Array.from(
     rows.reduce((map, row) => map.set(row.source, (map.get(row.source) || 0) + 1), new Map<string, number>()),
@@ -2698,6 +2843,7 @@ async function dream(args: string[]) {
     threads,
     decayCandidates,
     bySource,
+    crossLinks,
   });
 
   let result: "insert" | "update" | "skip" | "dry-run" = "dry-run";
@@ -2749,6 +2895,7 @@ async function dream(args: string[]) {
           score: e.score,
         })),
         decayCandidates,
+        crossSurfaceLinks: crossLinks,
         result,
         sourceId,
         dryRun,
@@ -2869,6 +3016,7 @@ async function main() {
   if (cmd === "observe") return observe(args);
   if (cmd === "dream") return dream(args);
   if (cmd === "correct") return correct(args);
+  if (cmd === "links") return links(args);
   if (cmd === "capture") return capture(args);
   if (cmd === "closeout") return closeout(args);
   if (cmd === "add") return addManual(args);

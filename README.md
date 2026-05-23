@@ -53,6 +53,19 @@ Open the observability dashboard:
 agent-memory-ui
 ```
 
+Consolidate the trail, inspect the cross-surface graph, and correct salience:
+
+```bash
+# Consolidate the last 24h of trail into dream episodes
+agent-memory dream
+
+# Correct how dream scores a thread / episode / event (feeds back into salience)
+agent-memory correct <thread:..|episode:..|eventId> demote --note "why"
+
+# List cross-surface links between threads (the memory graph)
+agent-memory links --limit 20
+```
+
 ---
 
 ## 🛠️ Components
