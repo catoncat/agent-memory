@@ -10,7 +10,7 @@ Agent Memory is a **Memory Trail Runtime** designed to bridge the gap between ra
 
 ## ✨ Features
 
-- **🛡️ Privacy First**: Everything stays local. FTS and semantic embeddings run on your machine.
+- **🛡️ Local-First Storage**: Your raw trail, FTS index, and embedding vectors all live on your machine, and FTS runs locally. Embedding vectors are generated via the remote Gemini API, then stored and cosine-searched locally (no embedding model runs on-device yet).
 - **👁️ Low-Cost Observation**: Captures macOS foreground state, active Chrome tabs, and developer sessions with a lightweight 60-second observe loop.
 - **🌙 Dream Pipeline**: Automatically consolidates raw activity trails into high-level episodic memories on a low-frequency 30-minute throttle.
 - **🔍 Semantic Recall**: Provides agents with structured context, reasons for matching, and evidence links.
@@ -38,7 +38,7 @@ Install the `launchd` service to keep the memory engine running in the backgroun
 agent-memory-ops install --interval-seconds 60
 ```
 
-The daemon does not wait 30 minutes to observe activity. Every 60-second heartbeat records the current usage trail, while heavier refresh, Dream, local embedding, and doctor work is throttled to roughly every 30 minutes.
+The daemon does not wait 30 minutes to observe activity. Every 60-second heartbeat records the current usage trail, while heavier refresh, Dream, embedding (remote Gemini API), and doctor work is throttled to roughly every 30 minutes.
 
 ### 3. Usage
 Check the status of your memory engine:

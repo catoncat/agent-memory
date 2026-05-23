@@ -86,13 +86,13 @@ function usage(exitCode = 0): never {
   agent-memory recent [--limit 10]
   agent-memory search "query" [--limit 10]
   agent-memory trail
-  agent-memory context "query" [--limit 6] [--refresh] [--semantic] [--local]
+  agent-memory context "query" [--limit 6] [--refresh] [--semantic]
   agent-memory observe [--json] [--timeout-ms 5000]
   agent-memory dream [--since-hours 24] [--limit 240] [--dry-run]
   agent-memory correct <thread:..|episode:..|link:..|eventId> <boost|demote|wrong-summary|split|merge> [--delta N] [--note "..."]
   agent-memory links [--limit 20]
   agent-memory notify [--since-min 35] [--limit 5] [--link-sim 0.90] [--episode-score 400] [--dry-run]
-  agent-memory embed [--limit 25] [--force] [--wait] [--local]
+  agent-memory embed [--limit 25] [--force] [--wait]
   agent-memory capture --title "..." [--summary "..."] [--content "..."] [--tag tag] [--stdin]
   agent-memory closeout --title "..." [--summary "..."] [--content "..."] [--status success] [--stdin]
   agent-memory add --source manual --kind note --title "..." --content "..."

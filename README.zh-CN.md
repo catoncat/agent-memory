@@ -8,7 +8,7 @@ Agent Memory 是一个 **记忆轨迹运行时 (Memory Trail Runtime)**，旨在
 
 ## ✨ 特性
 
-- **🛡️ 隐私优先**: 所有数据均保留在本地。FTS（全文检索）和语义向量索引都在你的机器上运行。
+- **🛡️ 本地优先存储**: 原始轨迹、FTS（全文检索）索引和向量索引都保留在本机，FTS 在本地运行。语义向量由远程 Gemini API 生成，向量落地后在本地做 cosine 检索（暂无本地 embedding 模型）。
 - **👁️ 低开销观察**: 通过 60 秒一次的轻量 observe 循环，捕捉 macOS 前台状态、活跃的 Chrome 标签页以及开发会话，无需高能耗的屏幕录制。
 - **🌙 梦境流水线**: 通过低频的 30 分钟节流，自动将原始活动轨迹整合为高层级的片段记忆。
 - **🔍 语义召回**: 为 Agent 提供结构化的上下文、匹配理由以及证据链接。
@@ -36,7 +36,7 @@ bun run src/ops.ts install-wrappers
 agent-memory-ops install --interval-seconds 60
 ```
 
-守护进程不是 30 分钟才观察一次。每个 60 秒心跳都会记录当前使用轨迹；较重的 refresh、Dream、本地 embedding 和 doctor 会被节流到约 30 分钟一次。
+守护进程不是 30 分钟才观察一次。每个 60 秒心跳都会记录当前使用轨迹；较重的 refresh、Dream、embedding（远程 Gemini API）和 doctor 会被节流到约 30 分钟一次。
 
 ### 3. 使用
 查看记忆引擎状态：
