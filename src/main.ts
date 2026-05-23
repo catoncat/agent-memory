@@ -89,7 +89,7 @@ function usage(exitCode = 0): never {
   agent-memory context "query" [--limit 6] [--refresh] [--semantic] [--local]
   agent-memory observe [--json] [--timeout-ms 5000]
   agent-memory dream [--since-hours 24] [--limit 240] [--dry-run]
-  agent-memory correct <thread:..|episode:..|eventId> <boost|demote|wrong-summary|split|merge> [--delta N] [--note "..."]
+  agent-memory correct <thread:..|episode:..|link:..|eventId> <boost|demote|wrong-summary|split|merge> [--delta N] [--note "..."]
   agent-memory links [--limit 20]
   agent-memory embed [--limit 25] [--force] [--wait] [--local]
   agent-memory capture --title "..." [--summary "..."] [--content "..."] [--tag tag] [--stdin]
@@ -2438,7 +2438,7 @@ async function correct(args: string[]) {
   const signal = args[1];
   if (!target || !signal || !(signal in SIGNAL_DELTA)) {
     console.error(
-      `usage: agent-memory correct <thread:..|episode:..|eventId> <${Object.keys(SIGNAL_DELTA).join("|")}> [--delta N] [--note "..."]`,
+      `usage: agent-memory correct <thread:..|episode:..|link:..|eventId> <${Object.keys(SIGNAL_DELTA).join("|")}> [--delta N] [--note "..."]`,
     );
     usage(1);
   }
@@ -2478,6 +2478,18 @@ async function correct(args: string[]) {
     } catch {
       app = "";
     }
+  } else if (target.startsWith("link:")) {
+    kind = "link";
+    const linkId = Number(target.slice("link:".length));
+    const row = db.query("SELECT src_app, dst_app FROM thread_links WHERE id = ?").get(linkId) as
+      | { src_app: string; dst_app: string }
+      | null;
+    if (!row) {
+      console.error(`link not found: ${target}`);
+      usage(1);
+    }
+    // normalize the app pair so feedback is direction-agnostic (appLo|appHi)
+    [source, app] = [row!.src_app, row!.dst_app].sort();
   } else {
     const e = db.query("SELECT source, app FROM events WHERE id = ?").get(Number(target)) as
       | { source: string; app: string | null }
@@ -2496,8 +2508,24 @@ async function correct(args: string[]) {
     [new Date().toISOString(), kind, target, source, app, signal, delta, note, "{}"],
   );
 
+  // P2.5: demoting a cross-surface link prunes that app-pair's edges now;
+  // future dream cycles also see a raised threshold via loadLinkFeedback.
+  let pruned = 0;
+  if (kind === "link" && delta < 0) {
+    pruned = db
+      .query(
+        `DELETE FROM thread_links
+         WHERE (src_app = ? AND dst_app = ?) OR (src_app = ? AND dst_app = ?)`,
+      )
+      .run(source, app, app, source).changes;
+  }
+
   console.log(
-    JSON.stringify({ ok: true, target, kind, signal, delta, bucket: `${source}|${app}` }, null, 2),
+    JSON.stringify(
+      { ok: true, target, kind, signal, delta, bucket: `${source}|${app}`, ...(kind === "link" ? { prunedLinks: pruned } : {}) },
+      null,
+      2,
+    ),
   );
 }
 
@@ -2509,6 +2537,7 @@ async function correct(args: string[]) {
 const CROSS_SIM_MIN = 0.85; // centroid cosine floor for a cross-surface link
 const CROSS_GAP_MAX_MIN = 30; // max idle gap between the two threads' intervals
 const CROSS_TOPK_PER_THREAD = 3; // cap links per thread (embedding is anisotropic; rank locally)
+const CROSS_ADJ_SCALE = 0.03; // P2.5: per-point shift of the sim threshold from link feedback
 
 function intervalGapMin(aStart: string, aEnd: string, bStart: string, bEnd: string): number {
   const as = new Date(aStart).getTime();
@@ -2529,7 +2558,29 @@ interface ThreadLink {
   gapMin: number;
 }
 
-function synthesizeCrossSurface(threads: DreamThread[]): ThreadLink[] {
+// P2.5: per-(appLo|appHi) link feedback. Mirrors loadLearnedWeights (14d
+// half-life, clamp ±4) so the link and salience correction loops behave alike.
+function loadLinkFeedback(db: Database): Map<string, number> {
+  const rows = db
+    .query("SELECT source, app, delta, ts FROM salience_feedback WHERE target_kind = 'link'")
+    .all() as Array<{ source: string; app: string; delta: number; ts: string }>;
+  const now = Date.now();
+  const halfLifeDays = 14;
+  const acc = new Map<string, number>();
+  for (const r of rows) {
+    const ageDays = (now - new Date(r.ts).getTime()) / 86400000;
+    const weight = r.delta * Math.pow(0.5, ageDays / halfLifeDays);
+    const key = [r.source, r.app].sort().join("|");
+    acc.set(key, (acc.get(key) ?? 0) + weight);
+  }
+  for (const [k, v] of acc) acc.set(k, Math.max(-4, Math.min(4, v)));
+  return acc;
+}
+
+function synthesizeCrossSurface(
+  threads: DreamThread[],
+  linkAdj?: Map<string, number>,
+): ThreadLink[] {
   const usable = threads.filter((t) => t.centroid && t.centroid.length > 0);
 
   // 1) candidate cross-app pairs passing the similarity + time-gap filters
@@ -2540,7 +2591,10 @@ function synthesizeCrossSurface(threads: DreamThread[]): ThreadLink[] {
       const b = usable[j];
       if (a.mainApp === b.mainApp) continue; // cross-surface only
       const sim = cosineSimilarity(a.centroid!, b.centroid!);
-      if (sim < CROSS_SIM_MIN) continue;
+      // P2.5: link feedback shifts this app-pair's bar — boost (adj>0) lowers it,
+      // demote (adj<0) raises it, so corrected pairs converge over dream cycles.
+      const adj = linkAdj?.get([a.mainApp, b.mainApp].sort().join("|")) ?? 0;
+      if (sim < CROSS_SIM_MIN - adj * CROSS_ADJ_SCALE) continue;
       const gap = intervalGapMin(a.start, a.end, b.start, b.end);
       if (gap > CROSS_GAP_MAX_MIN) continue;
       // deterministic src/dst order so UNIQUE(src,dst) stays stable
@@ -2601,7 +2655,7 @@ async function links(args: string[]) {
   const db = openDb();
   const rows = db
     .query(
-      `SELECT l.src_thread, l.dst_thread, l.src_app, l.dst_app, l.similarity, l.time_gap_min, l.updated_at,
+      `SELECT l.id, l.src_thread, l.dst_thread, l.src_app, l.dst_app, l.similarity, l.time_gap_min, l.updated_at,
               s.label AS src_label, d.label AS dst_label
        FROM thread_links l
        LEFT JOIN episode_threads s ON s.id = l.src_thread
@@ -2825,7 +2879,8 @@ async function dream(args: string[]) {
 
   // P2: cross-surface synthesis — link related threads across different apps
   // into a graph (central gardener). Runs after threads are persisted.
-  const crossLinks = synthesizeCrossSurface(threads);
+  const linkAdj = loadLinkFeedback(db);
+  const crossLinks = synthesizeCrossSurface(threads, linkAdj);
   if (!dryRun) persistThreadLinks(db, crossLinks);
 
   const decayCandidates = rows.filter((row) => row.source === "chrome-tabs" && rowSalience(row) <= 1.5).length;
