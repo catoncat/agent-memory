@@ -287,6 +287,10 @@ async function runHeartbeat(): Promise<JsonRecord> {
     );
     const dream = runJsonCommand("agent-memory", ["dream", "--since-hours", "24", "--limit", "240"], 60_000);
     const embed = runJsonCommand("agent-memory", ["embed", "--limit", "200", "--wait"], 60_000);
+    // P3: proactive outreach. Best-effort Background-tier pings; a failed
+    // delivery must not mark the whole heartbeat unhealthy, so it stays out of
+    // fullPipelineOk and is recorded only as a step.
+    const notify = runJsonCommand("agent-memory", ["notify", "--limit", "3"], 30_000);
     const doctor = runJsonCommand("agent-memory", ["doctor", "--json"], 30_000);
     const fullPipelineFinishedAt = nowIso();
     const fullPipelineOk =
@@ -295,6 +299,7 @@ async function runHeartbeat(): Promise<JsonRecord> {
     steps.refresh = compactCommandResult(refresh);
     steps.dream = compactCommandResult(dream);
     steps.embed = compactCommandResult(embed);
+    steps.notify = compactCommandResult(notify);
     steps.doctor = compactCommandResult(doctor);
     stats = extractStats(doctor.json);
     heartbeatOk = observe.ok && fullPipelineOk;

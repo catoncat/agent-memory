@@ -59,11 +59,15 @@ Consolidate the trail, inspect the cross-surface graph, and correct salience:
 # Consolidate the last 24h of trail into dream episodes
 agent-memory dream
 
-# Correct how dream scores a thread / episode / event (feeds back into salience)
-agent-memory correct <thread:..|episode:..|eventId> demote --note "why"
+# Correct how dream scores a thread / episode / link / event (feeds back into salience)
+agent-memory correct <thread:..|episode:..|link:..|eventId> demote --note "why"
 
 # List cross-surface links between threads (the memory graph)
 agent-memory links --limit 20
+
+# Surface fresh high-value findings as quiet Background-tier notifications
+agent-memory notify --dry-run        # preview what would fire, no delivery
+agent-memory notify --limit 3        # deliver (deduped), as the heartbeat does
 ```
 
 ---

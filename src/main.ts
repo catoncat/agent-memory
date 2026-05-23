@@ -91,6 +91,7 @@ function usage(exitCode = 0): never {
   agent-memory dream [--since-hours 24] [--limit 240] [--dry-run]
   agent-memory correct <thread:..|episode:..|link:..|eventId> <boost|demote|wrong-summary|split|merge> [--delta N] [--note "..."]
   agent-memory links [--limit 20]
+  agent-memory notify [--since-min 35] [--limit 5] [--link-sim 0.90] [--episode-score 400] [--dry-run]
   agent-memory embed [--limit 25] [--force] [--wait] [--local]
   agent-memory capture --title "..." [--summary "..."] [--content "..."] [--tag tag] [--stdin]
   agent-memory closeout --title "..." [--summary "..."] [--content "..."] [--status success] [--stdin]
@@ -371,6 +372,20 @@ function ensureTrailSchema(db: Database) {
       updated_at TEXT NOT NULL
     )
   `);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      rule TEXT NOT NULL,
+      dedupe_key TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      delivered INTEGER NOT NULL DEFAULT 0,
+      delivered_at TEXT
+    )
+  `);
+  db.run("CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at)");
 }
 
 function ensureEventEmbeddingSchema(db: Database) {
@@ -2668,6 +2683,185 @@ async function links(args: string[]) {
   console.log(JSON.stringify(rows, null, 2));
 }
 
+// ── Proactive outreach (P3: Background tier) ──
+// After dream consolidates the trail, a small rule engine scans the freshest
+// memory state and surfaces low-urgency pings via a local notify-client (macOS
+// Notification Center, no sound). A dedupe ledger (notifications table, UNIQUE
+// dedupe_key) guarantees each finding fires at most once, so the 30-min
+// heartbeat can call this every cycle without spamming.
+
+const NOTIFY_LINK_SIM_MIN = 0.9; // only the strongest cross-surface links earn a ping
+const NOTIFY_EPISODE_SCORE_MIN = 400; // salient-episode floor (avg≈186, max≈1546 in practice)
+const NOTIFY_SINCE_MIN = 35; // freshness window, slightly wider than the 30-min dream throttle
+const NOTIFY_LIMIT = 5; // cap deliveries per run so a catch-up burst stays gentle
+
+interface NotifyCandidate {
+  rule: string;
+  dedupeKey: string;
+  title: string;
+  body: string;
+  payload: Record<string, unknown>;
+  weight: number; // higher = surfaced first when --limit clips the batch
+}
+
+// macOS Notification Center via osascript. Background tier = quiet (no sound).
+// Escapes for an AppleScript string literal and collapses newlines.
+function deliverNotification(title: string, body: string): boolean {
+  const esc = (s: string) =>
+    `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/[\r\n]+/g, " ")}"`;
+  const script = `display notification ${esc(body)} with title ${esc(title)}`;
+  try {
+    execFileSync("osascript", ["-e", script], { timeout: 5000, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function notify(args: string[]) {
+  const sinceMin = Math.max(1, argNumber(args, "--since-min", NOTIFY_SINCE_MIN));
+  const limit = Math.max(1, argNumber(args, "--limit", NOTIFY_LIMIT));
+  const linkSim = Number(argValue(args, "--link-sim", "")) || NOTIFY_LINK_SIM_MIN;
+  const episodeScore = Number(argValue(args, "--episode-score", "")) || NOTIFY_EPISODE_SCORE_MIN;
+  const dryRun = hasFlag(args, "--dry-run");
+  const cutoff = new Date(Date.now() - sinceMin * 60 * 1000).toISOString();
+  const db = openDb();
+
+  const candidates: NotifyCandidate[] = [];
+
+  // Rule 1 — cross-surface link: a fresh, high-similarity edge between two apps
+  // (the P2/P2.5 graph). Noisy app pairs self-correct via `correct link:<id>
+  // demote`, which prunes the edge and raises its bar next cycle.
+  const linkRows = db
+    .query(
+      `SELECT l.src_thread, l.dst_thread, l.src_app, l.dst_app, l.similarity,
+              s.label AS src_label, d.label AS dst_label
+       FROM thread_links l
+       LEFT JOIN episode_threads s ON s.id = l.src_thread
+       LEFT JOIN episode_threads d ON d.id = l.dst_thread
+       WHERE l.updated_at >= ? AND l.similarity >= ?
+       ORDER BY l.similarity DESC`,
+    )
+    .all(cutoff, linkSim) as Array<{
+    src_thread: string;
+    dst_thread: string;
+    src_app: string;
+    dst_app: string;
+    similarity: number;
+    src_label: string | null;
+    dst_label: string | null;
+  }>;
+  for (const r of linkRows) {
+    const srcLabel = r.src_label || r.src_app;
+    const dstLabel = r.dst_label || r.dst_app;
+    // dedupe at the app-pair level, not thread-pair: two IM apps spawn many
+    // near-identical edges, and the proactive signal is "these surfaces are
+    // connected", which the app pair captures. One ping per cross-surface combo.
+    candidates.push({
+      rule: "cross-surface",
+      dedupeKey: `link:${[r.src_app, r.dst_app].sort().join("|")}`,
+      title: "🔗 跨 surface 关联",
+      body: `${r.src_app}「${srcLabel}」↔ ${r.dst_app}「${dstLabel}」(${r.similarity.toFixed(2)})`,
+      payload: { srcThread: r.src_thread, dstThread: r.dst_thread, similarity: r.similarity },
+      weight: r.similarity,
+    });
+  }
+
+  // Rule 2 — salient episode: a newly consolidated dream episode whose score
+  // clears the floor. Episodes are insert-once (source_id UNIQUE), so updated_at
+  // stays at creation time and the freshness window catches only new ones.
+  const epRows = db
+    .query(
+      `SELECT source_id, title, score
+       FROM episodes
+       WHERE updated_at >= ? AND score >= ?
+       ORDER BY score DESC`,
+    )
+    .all(cutoff, episodeScore) as Array<{ source_id: string; title: string; score: number }>;
+  for (const r of epRows) {
+    candidates.push({
+      rule: "salient-episode",
+      dedupeKey: `episode:${r.source_id}`,
+      title: "🌙 高价值记忆",
+      body: `${r.title}（score ${Math.round(r.score)}）`,
+      payload: { sourceId: r.source_id, score: r.score },
+      weight: r.score,
+    });
+  }
+
+  // Collapse same-key candidates within this run (keep the highest weight), so
+  // many edges of one app pair become a single ping and we never deliver twice
+  // for one dedupe_key.
+  const byKey = new Map<string, NotifyCandidate>();
+  for (const c of candidates) {
+    const prev = byKey.get(c.dedupeKey);
+    if (!prev || c.weight > prev.weight) byKey.set(c.dedupeKey, c);
+  }
+  const collapsed = Array.from(byKey.values());
+
+  // Drop anything already in the ledger.
+  const seen = new Set(
+    (db.query("SELECT dedupe_key FROM notifications").all() as Array<{ dedupe_key: string }>).map(
+      (r) => r.dedupe_key,
+    ),
+  );
+  const fresh = collapsed.filter((c) => !seen.has(c.dedupeKey));
+  const suppressed = collapsed.length - fresh.length;
+
+  // Interleave per-rule (each sorted by weight desc) round-robin under --limit.
+  // link similarity (0–1) and episode score (hundreds) live on different scales,
+  // so a global weight sort would let episodes starve links; round-robin keeps
+  // Background-tier variety instead.
+  const groups = new Map<string, NotifyCandidate[]>();
+  for (const c of fresh) {
+    const g = groups.get(c.rule) ?? [];
+    g.push(c);
+    groups.set(c.rule, g);
+  }
+  const lists = Array.from(groups.values());
+  for (const g of lists) g.sort((a, b) => b.weight - a.weight);
+  const batch: NotifyCandidate[] = [];
+  for (let i = 0; batch.length < limit && lists.some((l) => l.length > 0); i++) {
+    const next = lists[i % lists.length].shift();
+    if (next) batch.push(next);
+  }
+
+  const insertStmt = db.prepare(
+    `INSERT OR IGNORE INTO notifications (rule, dedupe_key, title, body, payload_json, created_at, delivered, delivered_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const markStmt = db.prepare("UPDATE notifications SET delivered = 1, delivered_at = ? WHERE dedupe_key = ?");
+
+  const fired: Array<{ rule: string; dedupeKey: string; body: string; delivered: boolean }> = [];
+  for (const c of batch) {
+    let delivered = false;
+    if (!dryRun) {
+      const nowIso = new Date().toISOString();
+      insertStmt.run(c.rule, c.dedupeKey, c.title, c.body, JSON.stringify(c.payload), nowIso, 0, null);
+      delivered = deliverNotification(c.title, c.body);
+      if (delivered) markStmt.run(nowIso, c.dedupeKey);
+    }
+    fired.push({ rule: c.rule, dedupeKey: c.dedupeKey, body: c.body, delivered });
+  }
+  db.close();
+
+  console.log(
+    JSON.stringify(
+      {
+        source: "agent-memory-notify",
+        sinceMin,
+        thresholds: { linkSim, episodeScore },
+        evaluated: { links: linkRows.length, episodes: epRows.length },
+        suppressed,
+        fired,
+        dryRun,
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 async function dream(args: string[]) {
   const sinceHours = Math.max(1, argNumber(args, "--since-hours", 24));
   const limit = Math.max(20, Math.min(1000, argNumber(args, "--limit", 240)));
@@ -3072,6 +3266,7 @@ async function main() {
   if (cmd === "dream") return dream(args);
   if (cmd === "correct") return correct(args);
   if (cmd === "links") return links(args);
+  if (cmd === "notify") return notify(args);
   if (cmd === "capture") return capture(args);
   if (cmd === "closeout") return closeout(args);
   if (cmd === "add") return addManual(args);
