@@ -1,39 +1,43 @@
 #!/usr/bin/env bun
 // Catty v0 — Spike A: prove the predict pipe end-to-end on a recorded trail.
-//   bun src/catty/spike.ts          # StubBrain (no model/creds; proves wiring)
-//   envchain mom bun src/catty/spike.ts --pi   # PiBrain (real, once pi is wired)
+//   bun src/catty/spike.ts                  # StubBrain + sample trail
+//   bun src/catty/spike.ts --real           # StubBrain + real raw_events
+//   envchain mom bun src/catty/spike.ts --real --pi   # PiBrain + real raw_events
 
 import { predictNextStep } from "./predict";
 import { StubBrain, PiBrain } from "./brain";
 import { SAMPLE_TRAIL } from "./sample-trail";
-import type { PredictionContext, TrailEvent } from "./types";
+import { buildPredictionContext, DEFAULT_EVENTS_DB, loadTrailFromEventsDb, trailSurface } from "./trail";
 
-/** Find the last app-change in the trail = a prediction trigger (proxy for dream segmentation). */
-function lastSwitchContext(trail: TrailEvent[]): PredictionContext {
-  let idx = trail.length - 1;
-  for (let i = trail.length - 1; i > 0; i--) {
-    if (trail[i].app !== trail[i - 1].app) {
-      idx = i;
-      break;
-    }
-  }
-  return {
-    now: trail[idx].ts,
-    recent: trail.slice(Math.max(0, idx - 6), idx + 1),
-    switchedFrom: idx > 0 ? trail[idx - 1] : undefined,
-    switchedTo: trail[idx],
-  };
+function argValue(name: string): string | undefined {
+  const idx = process.argv.indexOf(name);
+  if (idx === -1) return undefined;
+  return process.argv[idx + 1];
 }
 
+function positiveInt(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+const useRealTrail = process.argv.includes("--real");
 const brain = process.argv.includes("--pi") ? new PiBrain() : new StubBrain();
-const ctx = lastSwitchContext(SAMPLE_TRAIL);
+const dbPath = argValue("--db") ?? DEFAULT_EVENTS_DB;
+const limit = positiveInt(argValue("--limit"), 80);
+const trail = useRealTrail ? loadTrailFromEventsDb({ dbPath, limit }) : SAMPLE_TRAIL;
+const ctx = buildPredictionContext(trail);
 const hypothesis = await predictNextStep(ctx, brain);
 
 console.log(
   JSON.stringify(
     {
       brain: brain.name,
-      contextSwitch: { from: ctx.switchedFrom?.app, to: ctx.switchedTo.app, at: ctx.now },
+      trail: { source: useRealTrail ? "raw_events" : "sample", events: trail.length, dbPath: useRealTrail ? dbPath : undefined },
+      contextSwitch: {
+        from: ctx.switchedFrom ? trailSurface(ctx.switchedFrom) : undefined,
+        to: trailSurface(ctx.switchedTo),
+        at: ctx.now,
+      },
       hypothesis,
     },
     null,
