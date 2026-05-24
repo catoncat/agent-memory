@@ -28,6 +28,18 @@ export type LoadTrailOptions = {
   limit?: number;
 };
 
+export type PredictionCaseOptions = {
+  minActualEvents?: number;
+  maxActualEvents?: number;
+  recentWindow?: number;
+};
+
+export type PredictionCase = {
+  context: PredictionContext;
+  actualTrail: TrailEvent[];
+  boundaryIndex: number;
+};
+
 function hostFromUrl(raw: string | undefined): string {
   if (!raw) return "";
   try {
@@ -63,22 +75,15 @@ function isTimeGapBoundary(previous: TrailEvent, current: TrailEvent): boolean {
   return Number.isFinite(gapMs) && gapMs > TIME_GAP_BOUNDARY_MS;
 }
 
-export function buildPredictionContext(trail: TrailEvent[], recentWindow = CONTEXT_WINDOW): PredictionContext {
-  if (trail.length === 0) {
-    throw new Error("Catty needs at least one trail event to build a prediction context.");
-  }
+function isBoundaryAt(trail: TrailEvent[], idx: number): boolean {
+  if (idx <= 0) return false;
+  const current = trail[idx];
+  const previous = trail[idx - 1];
+  if (!current || !previous) return false;
+  return boundaryKey(current) !== boundaryKey(previous) || isTimeGapBoundary(previous, current);
+}
 
-  let idx = trail.length - 1;
-  for (let i = trail.length - 1; i > 0; i -= 1) {
-    const current = trail[i];
-    const previous = trail[i - 1];
-    if (!current || !previous) continue;
-    if (boundaryKey(current) !== boundaryKey(previous) || isTimeGapBoundary(previous, current)) {
-      idx = i;
-      break;
-    }
-  }
-
+function contextAt(trail: TrailEvent[], idx: number, recentWindow = CONTEXT_WINDOW): PredictionContext {
   const switchedTo = trail[idx];
   if (!switchedTo) {
     throw new Error("Catty failed to select a prediction boundary from the trail.");
@@ -89,6 +94,49 @@ export function buildPredictionContext(trail: TrailEvent[], recentWindow = CONTE
     recent: trail.slice(Math.max(0, idx - recentWindow + 1), idx + 1),
     switchedFrom: idx > 0 ? trail[idx - 1] : undefined,
     switchedTo,
+  };
+}
+
+export function buildPredictionContext(trail: TrailEvent[], recentWindow = CONTEXT_WINDOW): PredictionContext {
+  if (trail.length === 0) {
+    throw new Error("Catty needs at least one trail event to build a prediction context.");
+  }
+
+  let idx = trail.length - 1;
+  for (let i = trail.length - 1; i > 0; i -= 1) {
+    if (isBoundaryAt(trail, i)) {
+      idx = i;
+      break;
+    }
+  }
+
+  return contextAt(trail, idx, recentWindow);
+}
+
+export function buildPredictionCase(trail: TrailEvent[], options: PredictionCaseOptions = {}): PredictionCase {
+  if (trail.length === 0) {
+    throw new Error("Catty needs at least one trail event to build a prediction case.");
+  }
+
+  const minActualEvents = Math.max(0, Math.floor(options.minActualEvents ?? 1));
+  const maxBoundaryIndex = trail.length - minActualEvents - 1;
+  if (maxBoundaryIndex < 0) {
+    throw new Error("Catty needs enough later trail events to judge a prediction.");
+  }
+
+  let idx = maxBoundaryIndex;
+  for (let i = maxBoundaryIndex; i > 0; i -= 1) {
+    if (isBoundaryAt(trail, i)) {
+      idx = i;
+      break;
+    }
+  }
+
+  const actualEnd = options.maxActualEvents ? idx + 1 + Math.max(1, Math.floor(options.maxActualEvents)) : undefined;
+  return {
+    context: contextAt(trail, idx, options.recentWindow),
+    actualTrail: trail.slice(idx + 1, actualEnd),
+    boundaryIndex: idx,
   };
 }
 

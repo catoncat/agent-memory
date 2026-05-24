@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildPredictionContext, trailSurface } from "./trail";
+import { buildPredictionCase, buildPredictionContext, trailSurface } from "./trail";
 import type { TrailEvent } from "./types";
 
 test("buildPredictionContext uses the last app switch as the trigger", () => {
@@ -32,4 +32,19 @@ test("buildPredictionContext treats browser domain changes as triggers", () => {
 
 test("buildPredictionContext rejects an empty trail", () => {
   expect(() => buildPredictionContext([])).toThrow("at least one trail event");
+});
+
+test("buildPredictionCase can reserve later events as actual trail for judging", () => {
+  const trail: TrailEvent[] = [
+    { ts: "2026-05-24T08:00:00Z", app: "Cursor", title: "dream.ts" },
+    { ts: "2026-05-24T08:01:00Z", app: "Google Chrome", title: "sqlite-vec", url: "https://github.com/asg017/sqlite-vec" },
+    { ts: "2026-05-24T08:02:00Z", app: "Google Chrome", title: "sqlite-vec source", url: "https://github.com/asg017/sqlite-vec/tree/main/rust" },
+    { ts: "2026-05-24T08:03:00Z", app: "Cursor", title: "dream.ts" },
+  ];
+
+  const sample = buildPredictionCase(trail, { minActualEvents: 1 });
+
+  expect(sample.context.now).toBe("2026-05-24T08:01:00Z");
+  expect(sample.context.switchedTo.app).toBe("Google Chrome");
+  expect(sample.actualTrail.map((event) => event.app)).toEqual(["Google Chrome", "Cursor"]);
 });
