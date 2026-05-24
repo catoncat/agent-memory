@@ -1,6 +1,11 @@
 # Agent Memory Runtime Plan
 
-## Product Thesis
+> **2026-05-24 更新 — 定位已重构。** 本仓库不再是"产品"，而是 **Catty** 的**记忆器官**：
+> Catty 是一个实时、不断逼近你本人的"更好的我"agent。产品本体见
+> [`catty-thesis.md`](catty-thesis.md)，首个验证切片见 [`catty-v0-plan.md`](catty-v0-plan.md)。
+> 下面这份原始 runtime plan 仍准确描述记忆器官（observe → trail → signals → dream → recall）这一子系统。
+
+## Product Thesis（记忆器官子系统，非整体产品）
 
 The product is a local Agent memory layer for this Mac. It should help an agent answer:
 

@@ -1,117 +1,444 @@
 <!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="color-scheme" content="light" />
-    <title>Agent Memory</title>
-    <link rel="stylesheet" href="/app.css" />
-  </head>
-  <body>
-    <div class="app-shell">
-      <header class="topbar">
-        <div>
-          <h1>Agent Memory</h1>
-          <p id="statusLine">Loading</p>
-        </div>
-        <button class="icon-button" id="refreshButton" aria-label="Refresh memory" title="Refresh memory">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 0 1-14.7 4.4M4 12A8 8 0 0 1 18.7 7.6M19 3v5h-5M5 21v-5h5"/></svg>
-        </button>
-      </header>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light" />
+  <title>Catty — a voice-first memory cat</title>
+  <link rel="stylesheet" href="/catty.css" />
+</head>
+<body>
+  <div class="showroom">
 
-      <main>
-        <section class="panel hero-panel" id="overviewPanel">
-          <div class="metric-main">
-            <span class="label">events</span>
-            <strong id="eventTotal">0</strong>
-          </div>
-          <div class="metric-grid">
-            <div><span>fts</span><b id="ftsTotal">0</b></div>
-            <div><span>semantic</span><b id="semanticTotal">0</b></div>
-            <div><span>dream</span><b id="dreamTotal">0</b></div>
-            <div><span>size</span><b id="sizeTotal">0 KB</b></div>
-          </div>
-        </section>
+    <!-- Showroom chrome (not part of the product) -->
+    <header class="showroom-bar">
+      <div class="brand">
+        <span class="mark">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M 6 16 L 5 10 L 9 12 L 12 8 L 15 12 L 19 10 L 18 16 Q 18 19 15 19 L 9 19 Q 6 19 6 16 Z"/>
+            <circle cx="10" cy="14" r="0.9" fill="var(--paper)"/>
+            <circle cx="14" cy="14" r="0.9" fill="var(--paper)"/>
+          </svg>
+        </span>
+        <span class="name">Catty</span>
+        <span class="tag">a voice-first memory cat</span>
+      </div>
 
-        <section class="search-card">
-          <div class="search-row">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.3-4.3M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z"/></svg>
-            <input id="queryInput" type="search" placeholder="Search memory" autocomplete="off" />
-            <button id="contextButton">Context</button>
-          </div>
-          <div class="source-strip" id="sourceStrip">
-            <button data-source="all" class="active">Trail</button>
-            <button data-source="agent-dream">Dream</button>
-            <button data-source="codex">Codex</button>
-            <button data-source="chrome-tabs">Chrome</button>
-            <button data-source="x-bookmarks">X</button>
-            <button data-source="agent-closeout">Closeout</button>
-          </div>
-        </section>
-
-        <section class="view active" data-view="home">
-          <div class="section-head">
-            <h2>Trail</h2>
-            <span id="recentMode">live</span>
-          </div>
-          <div class="event-list" id="eventList"></div>
-        </section>
-
-        <section class="view" data-view="dream">
-          <div class="section-head">
-            <h2>Dream</h2>
-            <button class="small-action" id="dreamButton">Run</button>
-          </div>
-          <div class="event-list" id="dreamList"></div>
-        </section>
-
-        <section class="view" data-view="context">
-          <div class="section-head">
-            <h2>Search</h2>
-            <span id="contextMeta">local semantic</span>
-          </div>
-          <div class="event-list" id="contextList"></div>
-        </section>
-
-        <section class="view" data-view="sources">
-          <div class="section-head">
-            <h2>Sources</h2>
-            <span id="doctorState">ready</span>
-          </div>
-          <div class="source-grid" id="sourceGrid"></div>
-          <pre class="status-box" id="statusBox"></pre>
-        </section>
-      </main>
-
-      <nav class="bottom-nav" aria-label="Primary">
-        <button class="active" data-nav="home" aria-label="Home">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V20H4Z"/><path d="M9 20v-6h6v6"/></svg>
-          <span>Trail</span>
-        </button>
-        <button data-nav="dream" aria-label="Dream">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15.5c4 2.8 11.4 2.8 16 0"/><path d="M7 11a5 5 0 0 1 10 0v2H7Z"/><path d="M10 7.5V5M14 7.5V5"/></svg>
-          <span>Dream</span>
-        </button>
-        <button data-nav="context" aria-label="Context">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h16"/><path d="m16 10 3 2-3 2"/></svg>
-          <span>Search</span>
-        </button>
-        <button data-nav="sources" aria-label="Sources">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v5H5ZM5 14h6v5H5ZM15 14h4v5h-4Z"/></svg>
-          <span>Sources</span>
-        </button>
+      <nav class="tabs" id="tabs">
+        <button class="tab active" data-surface="window">full window</button>
+        <button class="tab" data-surface="menubar">menubar</button>
+        <button class="tab" data-surface="pet">desktop pet</button>
       </nav>
+
+      <div class="bar-right">
+        <div class="states" id="states-menubar" data-for="menubar">
+          <span class="lbl">state</span>
+          <button class="state-pill active" data-state="default">default</button>
+          <button class="state-pill" data-state="spark">spark</button>
+          <button class="state-pill" data-state="voice">voice</button>
+        </div>
+        <div class="states" id="states-pet" data-for="pet">
+          <span class="lbl">state</span>
+          <button class="state-pill active" data-state="idle">idle</button>
+          <button class="state-pill" data-state="listening">listening</button>
+          <button class="state-pill" data-state="speaking">speaking</button>
+          <button class="state-pill" data-state="spark">spark</button>
+        </div>
+        <a class="repo-link" href="https://github.com/catoncat/agent-memory" target="_blank" rel="noreferrer">catoncat/agent-memory</a>
+      </div>
+    </header>
+
+    <div class="stage">
+
+      <!-- ─────────────────────────── ③ FULL WINDOW · C · today + ask ─────────────────────────── -->
+      <section class="surface active" data-surface="window">
+        <div class="screen desk-win" style="width:920px;height:620px;padding:20px;display:flex;flex-direction:column;">
+          <div style="flex:1;min-height:0;background:var(--paper);border-radius:14px;box-shadow:var(--shadow-pop);overflow:hidden;display:flex;flex-direction:column;border:1px solid var(--vibrancy-edge);">
+
+            <!-- window title bar -->
+            <div style="height:36px;padding:0 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--divider);background:var(--vibrancy);backdrop-filter:blur(20px) saturate(160%);flex-shrink:0;">
+              <div style="display:flex;gap:6px;">
+                <span style="width:12px;height:12px;border-radius:50%;background:#ff5f57;"></span>
+                <span style="width:12px;height:12px;border-radius:50%;background:#febc2e;"></span>
+                <span style="width:12px;height:12px;border-radius:50%;background:#28c840;"></span>
+              </div>
+              <div style="margin-left:8px;display:flex;align-items:center;gap:6px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="var(--ink)">
+                  <path d="M 6 16 L 5 10 L 9 12 L 12 8 L 15 12 L 19 10 L 18 16 Q 18 19 15 19 L 9 19 Q 6 19 6 16 Z"/>
+                  <circle cx="10" cy="14" r="0.9" fill="var(--paper)"/>
+                  <circle cx="14" cy="14" r="0.9" fill="var(--paper)"/>
+                </svg>
+                <span class="body-em" style="font-size:12px;">Catty</span>
+                <span class="meta">· memory of envvar</span>
+              </div>
+              <div style="margin-left:auto;display:flex;gap:14px;color:var(--muted);font-size:11.5px;">
+                <span style="display:flex;align-items:center;gap:4px;">
+                  <span style="width:6px;height:6px;border-radius:50%;background:#65a30d;"></span>awake
+                </span>
+                <span class="mono">142,388 trails · 18.4MB</span>
+              </div>
+            </div>
+
+            <!-- today + ask -->
+            <div style="flex:1;min-height:0;padding:22px 28px 0;overflow:auto;display:flex;flex-direction:column;">
+
+              <!-- today narrative -->
+              <div style="padding-bottom:24px;border-bottom:1px solid var(--divider);">
+                <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:8px;">
+                  <span class="display-xl">Thursday</span>
+                  <span class="serif-italic" style="font-size:18px;color:var(--muted);">nov 21 · 14:32</span>
+                  <div style="margin-left:auto;display:flex;gap:6px;">
+                    <button style="padding:4px 10px;font-size:11.5px;border-radius:999px;border:none;background:var(--ink);color:var(--paper);cursor:pointer;font-weight:500;">today</button>
+                    <button style="padding:4px 10px;font-size:11.5px;border-radius:999px;border:1px solid var(--divider);background:transparent;color:var(--muted);cursor:pointer;font-weight:500;">this week</button>
+                    <button style="padding:4px 10px;font-size:11.5px;border-radius:999px;border:1px solid var(--divider);background:transparent;color:var(--muted);cursor:pointer;font-weight:500;">nov</button>
+                  </div>
+                </div>
+
+                <div style="font-family:var(--font-display);font-size:19px;line-height:1.6;color:var(--ink);max-width:680px;text-wrap:pretty;">
+                  you spent the morning chasing <span style="background:var(--amber-tint);">the dream-merge bug</span>. you opened cursor at 9:14 and didn't really leave it until lunch — except for a <span class="serif-italic" style="color:var(--muted);">twenty-minute detour</span> into the sqlite-vec rust source, and to close <span class="amber-chip">issue 37</span> for tobi. three commits. <span style="color:var(--muted);">e2d4f1c</span>, <span style="color:var(--muted);">97b3a02</span>, <span style="color:var(--muted);">4afe919</span>.
+                </div>
+
+                <!-- timeline -->
+                <div style="margin-top:22px;display:grid;gap:6px;">
+                  <div style="display:grid;grid-template-columns:44px 14px 1fr auto;gap:10px;align-items:center;font-size:13px;padding:4px 0;border-radius:6px;">
+                    <span class="mono meta" style="font-size:11px;">09:14</span><span class="src-dot code"></span><span>cursor — dream.ts</span><span class="meta" style="font-size:11px;">code</span>
+                  </div>
+                  <div style="display:grid;grid-template-columns:44px 14px 1fr auto;gap:10px;align-items:center;font-size:13px;padding:4px 0;border-radius:6px;">
+                    <span class="mono meta" style="font-size:11px;">10:48</span><span class="src-dot browse"></span><span>sqlite-vec readme + rust source</span><span class="meta" style="font-size:11px;">browse</span>
+                  </div>
+                  <div style="display:grid;grid-template-columns:44px 14px 1fr auto;gap:10px;align-items:center;font-size:13px;padding:4px 0;border-radius:6px;">
+                    <span class="mono meta" style="font-size:11px;">11:09</span><span class="src-dot chat"></span><span>tobi — issue 37 closed</span><span class="meta" style="font-size:11px;">chat</span>
+                  </div>
+                  <div style="display:grid;grid-template-columns:44px 14px 1fr auto;gap:10px;align-items:center;font-size:13px;padding:4px 0;border-radius:6px;">
+                    <span class="mono meta" style="font-size:11px;">12:01</span><span class="src-dot rest"></span><span>lunch · 38m</span><span class="meta" style="font-size:11px;">rest</span>
+                  </div>
+                  <div style="display:grid;grid-template-columns:44px 14px 1fr auto;gap:10px;align-items:center;font-size:13px;padding:4px 0;border-radius:6px;">
+                    <span class="mono meta" style="font-size:11px;">12:39</span><span class="src-dot code"></span><span>cursor — dream.ts (still)</span><span class="meta" style="font-size:11px;">code</span>
+                  </div>
+                  <div style="display:grid;grid-template-columns:44px 14px 1fr auto;gap:10px;align-items:center;font-size:13px;padding:4px 0;border-radius:6px;">
+                    <span class="mono meta" style="font-size:11px;">13:22</span><span class="src-dot read"></span><span>x · 4 things bookmarked</span><span class="meta" style="font-size:11px;">read</span>
+                  </div>
+                  <div style="display:grid;grid-template-columns:44px 14px 1fr auto;gap:10px;align-items:center;font-size:13px;padding:4px 0;border-radius:6px;">
+                    <span class="mono meta" style="font-size:11px;">14:08</span><span class="src-dot code"></span><span>cursor — dream.ts</span><span class="meta" style="font-size:11px;">code</span>
+                  </div>
+                  <div style="display:grid;grid-template-columns:44px 14px 1fr auto;gap:10px;align-items:center;font-size:13px;padding:4px 0;border-radius:6px;">
+                    <span class="mono meta" style="font-size:11px;">14:32</span><span class="src-dot rest"></span><span>now · idle 4m</span><span class="meta" style="font-size:11px;">rest</span>
+                  </div>
+                </div>
+
+                <!-- spark banner -->
+                <div style="margin-top:16px;padding:10px 14px;background:var(--amber-tint);border:1px solid var(--amber-edge);border-radius:10px;display:flex;align-items:center;gap:10px;">
+                  <svg viewBox="0 0 24 32" width="18" height="24" style="filter:drop-shadow(0 1px 0 rgba(161,98,7,0.25));" aria-hidden="true">
+                    <path d="M 14 1 L 4 17 L 11 17 L 7 30 L 20 12 L 13 12 Z" fill="#a16207" stroke="#7a4a05" stroke-width="1" stroke-linejoin="round"/>
+                  </svg>
+                  <div style="flex:1;font-size:13px;line-height:1.5;">
+                    <span class="body-em">a spark · </span>
+                    <span>meeting with tobi in 23m. you told him the merge would be ready.</span>
+                  </div>
+                  <button style="padding:4px 10px;font-size:11.5px;font-weight:600;border-radius:8px;background:var(--ink);color:var(--paper);border:none;cursor:pointer;">draft note</button>
+                </div>
+              </div>
+
+              <!-- ask -->
+              <div style="padding:16px 0;display:flex;flex-direction:column;gap:8px;">
+                <div class="eyebrow">ASK</div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+                  <button class="serif-italic" style="padding:5px 12px;border:1px solid var(--divider);background:var(--card);border-radius:999px;font-size:12.5px;color:var(--ink);cursor:pointer;">"what did I do yesterday?"</button>
+                  <button class="serif-italic" style="padding:5px 12px;border:1px solid var(--divider);background:var(--card);border-radius:999px;font-size:12.5px;color:var(--ink);cursor:pointer;">"what did I read about vector search?"</button>
+                  <button class="serif-italic" style="padding:5px 12px;border:1px solid var(--divider);background:var(--card);border-radius:999px;font-size:12.5px;color:var(--ink);cursor:pointer;">"remind me what tobi asked"</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;padding:8px 8px 8px 14px;background:var(--card);border-radius:12px;box-shadow:var(--shadow-card);">
+                  <span class="serif-italic" style="flex:1;color:var(--subtle);">ask anything about today, or any day before…</span>
+                  <button class="round-btn" aria-label="Hold to talk">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+        <div class="surface-caption">
+          <b>full window · today + ask.</b> opens to the day's narrative — chat folds to one row at the bottom, because most people just read. ⌘⏎ from the menubar to open.
+        </div>
+      </section>
+
+      <!-- ─────────────────────────── ② MENUBAR DROPDOWN ─────────────────────────── -->
+      <section class="surface" data-surface="menubar">
+
+        <!-- A · default -->
+        <div class="mb-state" data-state="default">
+          <div class="screen desk-mb" style="width:460px;height:560px;position:relative;display:flex;flex-direction:column;align-items:center;">
+            <div class="macbar" style="align-self:stretch;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7.5c-1.5 0-3 1-3.5 1s-1.8-1-3.5-1c-3 0-5 2.7-5 6.5 0 3.5 2.3 7 4.5 7 1 0 1.7-.7 3-.7 1.3 0 2 .7 3 .7 2.2 0 4.5-3.5 4.5-7 0-3.6-2-6.5-3-6.5z"/></svg>
+              <span style="font-weight:600;">Safari</span><span class="dim">File</span><span class="dim">Edit</span>
+              <div class="right">
+                <span class="catmark">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M 6 16 L 5 10 L 9 12 L 12 8 L 15 12 L 19 10 L 18 16 Q 18 19 15 19 L 9 19 Q 6 19 6 16 Z"/><circle cx="10" cy="14" r="0.9"/><circle cx="14" cy="14" r="0.9"/></svg>
+                </span>
+                <span class="clock">14:32</span>
+              </div>
+            </div>
+
+            <div style="position:relative;width:380px;margin-top:18px;border-radius:14px;background:var(--vibrancy);backdrop-filter:blur(28px) saturate(180%);border:1px solid var(--vibrancy-edge);box-shadow:var(--shadow-pop);overflow:hidden;color:var(--ink);">
+              <div style="position:absolute;top:-7px;right:30px;width:14px;height:14px;background:var(--vibrancy);transform:rotate(45deg);border-left:1px solid var(--vibrancy-edge);border-top:1px solid var(--vibrancy-edge);"></div>
+
+              <div style="padding:14px 16px 10px;display:flex;align-items:center;gap:10px;">
+                <img src="/assets/catty-portrait.png" alt="Catty" style="width:36px;height:auto;display:block;" draggable="false"/>
+                <div style="flex:1;">
+                  <div class="body-em">Catty</div>
+                  <div class="meta">awake · 3h watched · purring</div>
+                </div>
+                <div class="mono meta" style="font-size:10px;">v 0.4.1</div>
+              </div>
+
+              <div style="padding:10px 16px;border-top:1px solid var(--hairline);border-bottom:1px solid var(--hairline);background:rgba(28,25,23,0.02);">
+                <div class="eyebrow" style="margin-bottom:6px;">SHE SEES</div>
+                <div style="display:grid;gap:4px;">
+                  <div style="display:flex;gap:6px;align-items:center;font-size:12px;"><span class="src-dot code"></span><span style="color:var(--muted);">cursor —</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">agent-memory/src/dream.ts</span></div>
+                  <div style="display:flex;gap:6px;align-items:center;font-size:12px;"><span class="src-dot browse"></span><span style="color:var(--muted);">chrome —</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">sqlite-vec docs · 4 tabs</span></div>
+                  <div style="display:flex;gap:6px;align-items:center;font-size:12px;"><span class="src-dot chat"></span><span style="color:var(--muted);">imessage —</span><span>idle · last 22m</span></div>
+                </div>
+              </div>
+
+              <div style="padding:12px 16px 4px;">
+                <div class="eyebrow" style="margin-bottom:6px;">TODAY</div>
+                <div style="font-family:var(--font-display);font-size:15px;line-height:1.5;color:var(--ink);">
+                  you spent the morning <span style="background:var(--amber-tint);padding:0 3px;border-radius:4px;">chasing the dream-merge bug</span>, took a 20-min pause to read 4 things on sqlite-vec, then went back to it.
+                </div>
+              </div>
+
+              <div style="padding:10px 16px 4px;display:flex;gap:6px;flex-wrap:wrap;">
+                <button style="padding:5px 10px;border:1px solid var(--divider);background:var(--card);border-radius:999px;font-size:11.5px;color:var(--muted);cursor:pointer;">what did I do today?</button>
+                <button style="padding:5px 10px;border:1px solid var(--divider);background:var(--card);border-radius:999px;font-size:11.5px;color:var(--muted);cursor:pointer;">show me the merge</button>
+                <button style="padding:5px 10px;border:1px solid var(--divider);background:var(--card);border-radius:999px;font-size:11.5px;color:var(--muted);cursor:pointer;">forget the discord tangent</button>
+              </div>
+
+              <div style="margin:12px;padding:8px 10px;border-radius:10px;background:var(--card);box-shadow:var(--shadow-card);display:flex;align-items:center;gap:8px;">
+                <span class="meta serif-italic" style="flex:1;color:var(--subtle);">ask Catty…</span>
+                <span class="mono meta" style="font-size:10px;">⏎</span>
+                <button class="round-btn sm" aria-label="Hold to talk">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- B · spark -->
+        <div class="mb-state" data-state="spark" style="display:none;">
+          <div class="screen desk-mb" style="width:460px;height:560px;position:relative;display:flex;flex-direction:column;align-items:center;">
+            <div class="macbar" style="align-self:stretch;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7.5c-1.5 0-3 1-3.5 1s-1.8-1-3.5-1c-3 0-5 2.7-5 6.5 0 3.5 2.3 7 4.5 7 1 0 1.7-.7 3-.7 1.3 0 2 .7 3 .7 2.2 0 4.5-3.5 4.5-7 0-3.6-2-6.5-3-6.5z"/></svg>
+              <span style="font-weight:600;">Safari</span><span class="dim">File</span><span class="dim">Edit</span>
+              <div class="right">
+                <span class="catmark">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M 6 16 L 5 10 L 9 12 L 12 8 L 15 12 L 19 10 L 18 16 Q 18 19 15 19 L 9 19 Q 6 19 6 16 Z"/><circle cx="10" cy="14" r="0.9"/><circle cx="14" cy="14" r="0.9"/></svg>
+                  <span class="menu-dot"></span>
+                </span>
+                <span class="clock">14:32</span>
+              </div>
+            </div>
+
+            <div style="position:relative;width:380px;margin-top:18px;border-radius:14px;background:var(--vibrancy);backdrop-filter:blur(28px) saturate(180%);border:1px solid var(--vibrancy-edge);box-shadow:var(--shadow-pop);overflow:hidden;color:var(--ink);">
+              <div style="position:absolute;top:-7px;right:30px;width:14px;height:14px;background:var(--vibrancy);transform:rotate(45deg);border-left:1px solid var(--vibrancy-edge);border-top:1px solid var(--vibrancy-edge);"></div>
+
+              <div style="padding:14px 16px 10px;display:flex;align-items:center;gap:10px;position:relative;">
+                <div style="position:relative;">
+                  <img src="/assets/catty-portrait.png" alt="Catty" style="width:36px;height:auto;display:block;" draggable="false"/>
+                  <svg viewBox="0 0 24 32" width="14" height="18.7" style="position:absolute;top:-6px;right:-2px;filter:drop-shadow(0 1px 0 rgba(161,98,7,0.25));"><path d="M 14 1 L 4 17 L 11 17 L 7 30 L 20 12 L 13 12 Z" fill="#a16207" stroke="#7a4a05" stroke-width="1" stroke-linejoin="round"/></svg>
+                </div>
+                <div style="flex:1;">
+                  <div class="body-em" style="display:flex;align-items:center;gap:8px;">
+                    Catty
+                    <span style="font-size:10px;font-weight:600;letter-spacing:0.06em;padding:1px 6px 2px;border-radius:4px;background:var(--spark-tint);color:var(--spark);">SPARK · NEW</span>
+                  </div>
+                  <div class="meta">2 things worth a glance · 6m ago</div>
+                </div>
+                <button style="font-size:11px;padding:4px 8px;border-radius:8px;background:transparent;border:1px solid var(--divider);color:var(--muted);cursor:pointer;">shh</button>
+              </div>
+
+              <div style="padding:4px 16px 12px;border-top:1px solid var(--hairline);display:grid;gap:8px;">
+                <div style="padding:10px 12px;background:var(--card);border-radius:10px;box-shadow:var(--shadow-card);display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start;">
+                  <div>
+                    <div class="body-em" style="margin-bottom:2px;">sqlite-vec tab is still open</div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.42;">you bookmarked the same repo on <span class="amber-chip">x · 19h ago</span> and now have it open in cursor. shall I pin it to <span class="amber-chip">today</span>?</div>
+                  </div>
+                  <div style="width:22px;height:22px;border-radius:50%;background:var(--amber-tint);color:var(--amber);display:grid;place-items:center;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                  </div>
+                </div>
+                <div style="padding:10px 12px;background:var(--card);border-radius:10px;box-shadow:var(--shadow-card);display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start;">
+                  <div>
+                    <div class="body-em" style="margin-bottom:2px;">issue 37 closed</div>
+                    <div style="font-size:12px;color:var(--muted);line-height:1.42;">tobi pushed the fix you reviewed. <span class="amber-chip">2 trails</span> related — want a summary?</div>
+                  </div>
+                  <div style="width:22px;height:22px;border-radius:50%;background:#dcf4e1;color:#1f7a3f;display:grid;place-items:center;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5 9-10"/></svg>
+                  </div>
+                </div>
+              </div>
+
+              <div style="padding:10px 16px;border-top:1px solid var(--hairline);display:flex;gap:8px;font-size:11.5px;color:var(--muted);align-items:center;">
+                <span style="flex:1;">nudge me again in</span>
+                <button style="padding:3px 8px;border-radius:6px;background:var(--ink);color:var(--paper);border:none;font-size:11px;font-weight:500;cursor:pointer;">1h</button>
+                <button style="padding:3px 8px;border-radius:6px;background:transparent;color:var(--muted);border:1px solid var(--divider);font-size:11px;font-weight:500;cursor:pointer;">tomorrow</button>
+                <button style="padding:3px 8px;border-radius:6px;background:transparent;color:var(--muted);border:1px solid var(--divider);font-size:11px;font-weight:500;cursor:pointer;">never</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- C · voice -->
+        <div class="mb-state" data-state="voice" style="display:none;">
+          <div class="screen desk-mb" style="width:460px;height:560px;position:relative;display:flex;flex-direction:column;align-items:center;">
+            <div class="macbar" style="align-self:stretch;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7.5c-1.5 0-3 1-3.5 1s-1.8-1-3.5-1c-3 0-5 2.7-5 6.5 0 3.5 2.3 7 4.5 7 1 0 1.7-.7 3-.7 1.3 0 2 .7 3 .7 2.2 0 4.5-3.5 4.5-7 0-3.6-2-6.5-3-6.5z"/></svg>
+              <span style="font-weight:600;">Safari</span><span class="dim">File</span><span class="dim">Edit</span>
+              <div class="right">
+                <span class="catmark">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M 6 16 L 5 10 L 9 12 L 12 8 L 15 12 L 19 10 L 18 16 Q 18 19 15 19 L 9 19 Q 6 19 6 16 Z"/><circle cx="10" cy="14" r="0.9"/><circle cx="14" cy="14" r="0.9"/></svg>
+                </span>
+                <span class="clock">14:32</span>
+              </div>
+            </div>
+
+            <div style="position:relative;width:380px;margin-top:18px;border-radius:14px;background:var(--vibrancy);backdrop-filter:blur(28px) saturate(180%);border:1px solid var(--vibrancy-edge);box-shadow:var(--shadow-pop);overflow:hidden;color:var(--ink);">
+              <div style="position:absolute;top:-7px;right:30px;width:14px;height:14px;background:var(--vibrancy);transform:rotate(45deg);border-left:1px solid var(--vibrancy-edge);border-top:1px solid var(--vibrancy-edge);"></div>
+
+              <div style="padding:18px 16px 12px;text-align:center;">
+                <div style="position:relative;width:88px;height:92px;margin:0 auto;">
+                  <div style="position:absolute;inset:-10px;border-radius:50%;background:radial-gradient(circle, rgba(161,98,7,0.30) 0%, rgba(161,98,7,0) 70%);"></div>
+                  <img src="/assets/catty-portrait.png" alt="Catty" style="width:88px;height:auto;display:block;position:relative;" draggable="false"/>
+                  <svg viewBox="0 0 32 32" width="32" height="32" style="position:absolute;top:18px;left:-16px;" aria-hidden="true">
+                    <path d="M 6 16 a 10 10 0 0 1 0 -1" stroke="#a16207" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.9"/>
+                    <path d="M 3 16 a 13 13 0 0 1 0 -1" stroke="#a16207" stroke-width="1.6" fill="none" stroke-linecap="round" opacity="0.6"/>
+                    <path d="M 0 16 a 16 16 0 0 1 0 -1" stroke="#a16207" stroke-width="1.2" fill="none" stroke-linecap="round" opacity="0.35"/>
+                  </svg>
+                </div>
+                <div class="display-md" style="margin-top:12px;">listening</div>
+                <div class="meta serif-italic" style="margin-top:4px;">what do you want me to remember, or remind you of?</div>
+              </div>
+
+              <div style="margin:8px 16px 0;padding:10px 12px;background:var(--card);border-radius:10px;box-shadow:var(--shadow-card);min-height:56px;">
+                <div class="eyebrow" style="margin-bottom:6px;">I HEAR</div>
+                <div style="font-size:13px;line-height:1.5;">
+                  <span style="color:var(--ink);">what was that link tobi sent me last </span>
+                  <span style="color:var(--subtle);">tuesday about vector</span>
+                  <span class="caret"></span>
+                </div>
+              </div>
+
+              <div class="wave" data-wave="menubar" style="margin:10px 16px 14px;gap:3px;height:32px;"></div>
+
+              <div style="padding:10px 16px;border-top:1px solid var(--hairline);display:flex;gap:8px;font-size:11px;color:var(--muted);align-items:center;">
+                <span class="kbd">⌥ space</span><span>release to send</span>
+                <span class="mono" style="margin-left:auto;">esc · cancel</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="surface-caption">
+          <b>menubar dropdown · always there.</b> click the cat in the menubar to open; ⌥space anywhere brings up voice. flip <i>default / spark / voice</i> top-right.
+        </div>
+      </section>
+
+      <!-- ─────────────────────────── ① DESKTOP PET ─────────────────────────── -->
+      <section class="surface" data-surface="pet">
+
+        <!-- A · idle -->
+        <div class="pet-state" data-state="idle">
+          <div class="screen desk-pet" style="width:520px;height:400px;position:relative;">
+            <div class="grain"></div>
+            <div class="macbar" style="position:absolute;top:0;left:0;right:0;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7.5c-1.5 0-3 1-3.5 1s-1.8-1-3.5-1c-3 0-5 2.7-5 6.5 0 3.5 2.3 7 4.5 7 1 0 1.7-.7 3-.7 1.3 0 2 .7 3 .7 2.2 0 4.5-3.5 4.5-7 0-3.6-2-6.5-3-6.5zM13 5c.9-1 1.5-2 1.4-3-.8 0-2 .5-2.8 1.4-.8.8-1.4 1.9-1.3 3 1 .1 2-.4 2.7-1.4z"/></svg>
+              <span style="font-weight:600;">Finder</span><span class="dim">File</span><span class="dim">Edit</span><span class="dim">View</span>
+              <div class="right"><span class="catmark" style="background:rgba(250,246,239,0.18);"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M 6 16 L 5 10 L 9 12 L 12 8 L 15 12 L 19 10 L 18 16 Q 18 19 15 19 L 9 19 Q 6 19 6 16 Z"/><circle cx="10" cy="14" r="0.9"/><circle cx="14" cy="14" r="0.9"/></svg><span class="clock">14:32</span></span></div>
+            </div>
+            <div style="position:absolute;bottom:80px;right:60px;width:140px;height:150px;">
+              <img src="/assets/catty-portrait.png" alt="Catty" style="width:140px;height:auto;display:block;" draggable="false"/>
+              <svg viewBox="0 0 40 20" width="40" height="20" style="position:absolute;top:-4px;right:4px;" aria-hidden="true">
+                <circle cx="6" cy="14" r="1.6" fill="#a8a29e"/><circle cx="16" cy="9" r="2.1" fill="#a8a29e"/><circle cx="28" cy="4" r="2.6" fill="#a8a29e"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- B · listening -->
+        <div class="pet-state" data-state="listening" style="display:none;">
+          <div class="screen desk-pet" style="width:520px;height:400px;position:relative;">
+            <div class="grain"></div>
+            <div class="macbar" style="position:absolute;top:0;left:0;right:0;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7.5c-1.5 0-3 1-3.5 1s-1.8-1-3.5-1c-3 0-5 2.7-5 6.5 0 3.5 2.3 7 4.5 7 1 0 1.7-.7 3-.7 1.3 0 2 .7 3 .7 2.2 0 4.5-3.5 4.5-7 0-3.6-2-6.5-3-6.5zM13 5c.9-1 1.5-2 1.4-3-.8 0-2 .5-2.8 1.4-.8.8-1.4 1.9-1.3 3 1 .1 2-.4 2.7-1.4z"/></svg>
+              <span style="font-weight:600;">Finder</span><span class="dim">File</span><span class="dim">Edit</span><span class="dim">View</span>
+              <div class="right"><span class="catmark" style="background:rgba(250,246,239,0.18);"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M 6 16 L 5 10 L 9 12 L 12 8 L 15 12 L 19 10 L 18 16 Q 18 19 15 19 L 9 19 Q 6 19 6 16 Z"/><circle cx="10" cy="14" r="0.9"/><circle cx="14" cy="14" r="0.9"/></svg><span class="clock">14:32</span></span></div>
+            </div>
+            <div style="position:absolute;bottom:70px;right:56px;width:160px;height:170px;">
+              <div style="position:absolute;inset:-16px;border-radius:50%;background:radial-gradient(circle, rgba(161,98,7,0.28) 0%, rgba(161,98,7,0) 70%);animation:halo 1.4s var(--ease) infinite;"></div>
+              <img src="/assets/catty-portrait.png" alt="Catty" style="width:160px;height:auto;display:block;position:relative;" draggable="false"/>
+              <svg viewBox="0 0 32 32" width="32" height="32" style="position:absolute;top:20px;left:-28px;" aria-hidden="true">
+                <path d="M 6 16 a 10 10 0 0 1 0 -1" stroke="#a16207" stroke-width="2" fill="none" stroke-linecap="round" opacity="0.9"/>
+                <path d="M 3 16 a 13 13 0 0 1 0 -1" stroke="#a16207" stroke-width="1.6" fill="none" stroke-linecap="round" opacity="0.6"/>
+                <path d="M 0 16 a 16 16 0 0 1 0 -1" stroke="#a16207" stroke-width="1.2" fill="none" stroke-linecap="round" opacity="0.35"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- C · speaking -->
+        <div class="pet-state" data-state="speaking" style="display:none;">
+          <div class="screen desk-pet" style="width:520px;height:400px;position:relative;">
+            <div class="grain"></div>
+            <div class="macbar" style="position:absolute;top:0;left:0;right:0;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7.5c-1.5 0-3 1-3.5 1s-1.8-1-3.5-1c-3 0-5 2.7-5 6.5 0 3.5 2.3 7 4.5 7 1 0 1.7-.7 3-.7 1.3 0 2 .7 3 .7 2.2 0 4.5-3.5 4.5-7 0-3.6-2-6.5-3-6.5zM13 5c.9-1 1.5-2 1.4-3-.8 0-2 .5-2.8 1.4-.8.8-1.4 1.9-1.3 3 1 .1 2-.4 2.7-1.4z"/></svg>
+              <span style="font-weight:600;">Finder</span><span class="dim">File</span><span class="dim">Edit</span><span class="dim">View</span>
+              <div class="right"><span class="catmark" style="background:rgba(250,246,239,0.18);"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M 6 16 L 5 10 L 9 12 L 12 8 L 15 12 L 19 10 L 18 16 Q 18 19 15 19 L 9 19 Q 6 19 6 16 Z"/><circle cx="10" cy="14" r="0.9"/><circle cx="14" cy="14" r="0.9"/></svg><span class="clock">14:32</span></span></div>
+            </div>
+            <div style="position:absolute;bottom:100px;right:60px;display:flex;align-items:flex-end;gap:12px;">
+              <div class="speech" style="margin-bottom:26px;max-width:260px;">
+                <svg width="14" height="12" viewBox="0 0 14 12" class="tail" aria-hidden="true"><path d="M 14 0 L 0 6 L 14 12 Z" fill="var(--card)"/></svg>
+                <div style="margin-bottom:4px;">you bookmarked <span class="amber-chip">sqlite-vec</span> on X yesterday — want me to drop the link into <span class="amber-chip">cursor</span>?</div>
+                <div style="display:flex;gap:6px;margin-top:8px;">
+                  <button style="padding:4px 10px;border-radius:8px;background:var(--ink);color:var(--paper);border:none;font-size:11px;font-weight:600;cursor:pointer;">yes</button>
+                  <button style="padding:4px 10px;border-radius:8px;background:transparent;color:var(--muted);border:1px solid var(--divider);font-size:11px;font-weight:500;cursor:pointer;">not now</button>
+                  <button style="padding:4px 8px;border-radius:8px;background:transparent;color:var(--subtle);border:none;font-size:11px;font-weight:500;cursor:pointer;">forget</button>
+                </div>
+              </div>
+              <div style="position:relative;width:140px;height:150px;">
+                <img src="/assets/catty-portrait.png" alt="Catty" style="width:140px;height:auto;display:block;" draggable="false"/>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- D · spark -->
+        <div class="pet-state" data-state="spark" style="display:none;">
+          <div class="screen desk-pet" style="width:520px;height:400px;position:relative;">
+            <div class="grain"></div>
+            <div class="macbar" style="position:absolute;top:0;left:0;right:0;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7.5c-1.5 0-3 1-3.5 1s-1.8-1-3.5-1c-3 0-5 2.7-5 6.5 0 3.5 2.3 7 4.5 7 1 0 1.7-.7 3-.7 1.3 0 2 .7 3 .7 2.2 0 4.5-3.5 4.5-7 0-3.6-2-6.5-3-6.5zM13 5c.9-1 1.5-2 1.4-3-.8 0-2 .5-2.8 1.4-.8.8-1.4 1.9-1.3 3 1 .1 2-.4 2.7-1.4z"/></svg>
+              <span style="font-weight:600;">Finder</span><span class="dim">File</span><span class="dim">Edit</span><span class="dim">View</span>
+              <div class="right"><span class="catmark" style="background:rgba(250,246,239,0.18);"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M 6 16 L 5 10 L 9 12 L 12 8 L 15 12 L 19 10 L 18 16 Q 18 19 15 19 L 9 19 Q 6 19 6 16 Z"/><circle cx="10" cy="14" r="0.9"/><circle cx="14" cy="14" r="0.9"/></svg><span class="clock">14:32</span></span></div>
+            </div>
+            <div style="position:absolute;bottom:80px;right:60px;width:140px;height:160px;">
+              <img src="/assets/catty-portrait.png" alt="Catty" style="width:140px;height:auto;display:block;" draggable="false"/>
+              <svg viewBox="0 0 24 32" width="36" height="48" style="position:absolute;top:-10px;right:32px;filter:drop-shadow(0 1px 0 rgba(161,98,7,0.25));"><path d="M 14 1 L 4 17 L 11 17 L 7 30 L 20 12 L 13 12 Z" fill="#a16207" stroke="#7a4a05" stroke-width="1" stroke-linejoin="round"/></svg>
+              <div style="position:absolute;top:4px;right:18px;width:10px;height:10px;border-radius:50%;background:var(--spark);animation:petspark 1.6s var(--ease) infinite;"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="surface-caption">
+          <b>desktop pet · floats by your dock.</b> idle curls with dream dots; spark = she noticed something; click to hear it. press ⌥space anywhere to summon. flip states top-right.
+        </div>
+      </section>
+
     </div>
+  </div>
 
-    <dialog id="detailDialog">
-      <article class="detail-sheet">
-        <button class="icon-button close-button" id="closeDetail" aria-label="Close" title="Close">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
-        </button>
-        <div id="detailContent"></div>
-      </article>
-    </dialog>
-
-    <script src="/app.js"></script>
-  </body>
+  <script src="/catty.js"></script>
+</body>
 </html>

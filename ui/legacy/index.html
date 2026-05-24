@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <title>Agent Memory</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h1>Agent Memory</h1>
+          <p id="statusLine">Loading</p>
+        </div>
+        <button class="icon-button" id="refreshButton" aria-label="Refresh memory" title="Refresh memory">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 0 1-14.7 4.4M4 12A8 8 0 0 1 18.7 7.6M19 3v5h-5M5 21v-5h5"/></svg>
+        </button>
+      </header>
+
+      <main>
+        <section class="panel hero-panel" id="overviewPanel">
+          <div class="metric-main">
+            <span class="label">events</span>
+            <strong id="eventTotal">0</strong>
+          </div>
+          <div class="metric-grid">
+            <div><span>fts</span><b id="ftsTotal">0</b></div>
+            <div><span>semantic</span><b id="semanticTotal">0</b></div>
+            <div><span>dream</span><b id="dreamTotal">0</b></div>
+            <div><span>size</span><b id="sizeTotal">0 KB</b></div>
+          </div>
+        </section>
+
+        <section class="search-card">
+          <div class="search-row">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.3-4.3M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z"/></svg>
+            <input id="queryInput" type="search" placeholder="Search memory" autocomplete="off" />
+            <button id="contextButton">Context</button>
+          </div>
+          <div class="source-strip" id="sourceStrip">
+            <button data-source="all" class="active">Trail</button>
+            <button data-source="agent-dream">Dream</button>
+            <button data-source="codex">Codex</button>
+            <button data-source="chrome-tabs">Chrome</button>
+            <button data-source="x-bookmarks">X</button>
+            <button data-source="agent-closeout">Closeout</button>
+          </div>
+        </section>
+
+        <section class="view active" data-view="home">
+          <div class="section-head">
+            <h2>Trail</h2>
+            <span id="recentMode">live</span>
+          </div>
+          <div class="event-list" id="eventList"></div>
+        </section>
+
+        <section class="view" data-view="dream">
+          <div class="section-head">
+            <h2>Dream</h2>
+            <button class="small-action" id="dreamButton">Run</button>
+          </div>
+          <div class="event-list" id="dreamList"></div>
+        </section>
+
+        <section class="view" data-view="context">
+          <div class="section-head">
+            <h2>Search</h2>
+            <span id="contextMeta">local semantic</span>
+          </div>
+          <div class="event-list" id="contextList"></div>
+        </section>
+
+        <section class="view" data-view="sources">
+          <div class="section-head">
+            <h2>Sources</h2>
+            <span id="doctorState">ready</span>
+          </div>
+          <div class="source-grid" id="sourceGrid"></div>
+          <pre class="status-box" id="statusBox"></pre>
+        </section>
+      </main>
+
+      <nav class="bottom-nav" aria-label="Primary">
+        <button class="active" data-nav="home" aria-label="Home">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V20H4Z"/><path d="M9 20v-6h6v6"/></svg>
+          <span>Trail</span>
+        </button>
+        <button data-nav="dream" aria-label="Dream">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15.5c4 2.8 11.4 2.8 16 0"/><path d="M7 11a5 5 0 0 1 10 0v2H7Z"/><path d="M10 7.5V5M14 7.5V5"/></svg>
+          <span>Dream</span>
+        </button>
+        <button data-nav="context" aria-label="Context">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h16"/><path d="m16 10 3 2-3 2"/></svg>
+          <span>Search</span>
+        </button>
+        <button data-nav="sources" aria-label="Sources">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v5H5ZM5 14h6v5H5ZM15 14h4v5h-4Z"/></svg>
+          <span>Sources</span>
+        </button>
+      </nav>
+    </div>
+
+    <dialog id="detailDialog">
+      <article class="detail-sheet">
+        <button class="icon-button close-button" id="closeDetail" aria-label="Close" title="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+        <div id="detailContent"></div>
+      </article>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

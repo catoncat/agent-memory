@@ -1,0 +1,324 @@
+/* Catty — voice-first conversational memory cat.
+   Static high-fidelity prototype, ported 1:1 from the Claude Design handoff
+   (Flash Cat — Dreamer direction). Vanilla HTML/CSS/JS, no build step.
+   Light only. macOS-first. Newsreader serif for nouns of meaning, SF Pro for UI. */
+
+@import url("https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+:root {
+  color-scheme: light;
+
+  --font-display: "Newsreader", "New York", "Charter", Georgia, serif;
+  --font-ui:      -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --font-mono:    ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --paper:    #faf6ef;
+  --card:     #fffdf7;
+  --card-2:   #f3eee2;
+  --divider:  rgba(28, 25, 23, 0.08);
+  --hairline: rgba(28, 25, 23, 0.04);
+
+  --ink:    #1c1917;
+  --muted:  #57534e;
+  --subtle: #a8a29e;
+
+  --amber:      #a16207;
+  --amber-soft: rgba(161, 98, 7, 0.14);
+  --amber-edge: rgba(161, 98, 7, 0.34);
+  --amber-tint: #fdf4e3;
+
+  --spark:      #b91c1c;
+  --spark-tint: #fcebea;
+
+  --vibrancy:        rgba(250, 246, 239, 0.78);
+  --vibrancy-edge:   rgba(28, 25, 23, 0.12);
+
+  --src-code:   #a16207;
+  --src-browse: #2563eb;
+  --src-chat:   #65a30d;
+  --src-read:   #a855f7;
+  --src-write:  #db2777;
+  --src-rest:   #78716c;
+
+  --r-pill: 9999px;
+  --r-lg:   14px;
+  --r-md:   10px;
+  --r-sm:    6px;
+  --r-xs:    4px;
+
+  --shadow-pop:    0 12px 36px rgba(28, 25, 23, 0.16), 0 2px 6px rgba(28, 25, 23, 0.06);
+  --shadow-card:   0 1px 3px rgba(28, 25, 23, 0.05), 0 0 0 1px rgba(28, 25, 23, 0.04);
+  --shadow-hover:  0 6px 18px rgba(28, 25, 23, 0.10);
+  --shadow-inset-paper: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+
+  --ease:        cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-quick:   120ms;
+  --dur-base:    220ms;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+html {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+body { line-height: 1.42; }
+
+/* Type classes — never invent new ones */
+.display-xl { font-family: var(--font-display); font-size: 38px; font-weight: 500; line-height: 1.06; letter-spacing: -0.012em; }
+.display-lg { font-family: var(--font-display); font-size: 28px; font-weight: 500; line-height: 1.1;  letter-spacing: -0.012em; }
+.display-md { font-family: var(--font-display); font-size: 22px; font-weight: 500; line-height: 1.16; }
+.serif-italic { font-family: var(--font-display); font-style: italic; font-weight: 400; }
+
+.body-lg { font-size: 15px; font-weight: 400; }
+.body    { font-size: 13px; font-weight: 400; }
+.body-em { font-size: 13px; font-weight: 600; }
+.caption { font-size: 11px; color: var(--muted); }
+.meta    { font-size: 11px; color: var(--subtle); }
+
+.eyebrow {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--subtle);
+}
+.mono { font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+
+/* Cards */
+.card {
+  background: var(--card);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+}
+
+/* Source dot — one of six, never as filled chip */
+.src-dot {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  vertical-align: middle;
+}
+.src-dot.code   { background: var(--src-code); }
+.src-dot.browse { background: var(--src-browse); }
+.src-dot.chat   { background: var(--src-chat); }
+.src-dot.read   { background: var(--src-read); }
+.src-dot.write  { background: var(--src-write); }
+.src-dot.rest   { background: var(--src-rest); }
+
+/* Amber chip — used for evidence chips inline in Catty's answers */
+.amber-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 6px 2px;
+  background: var(--amber-tint);
+  color: var(--amber);
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-weight: 500;
+  font-feature-settings: "tnum";
+}
+
+/* Spark — for "your cat noticed" moments */
+.spark-pulse {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 0 0 var(--amber-edge);
+  animation: spark-pulse 1.8s var(--ease) infinite;
+}
+@keyframes spark-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(161, 98, 7, 0.5); }
+  70%  { box-shadow: 0 0 0 10px rgba(161, 98, 7, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(161, 98, 7, 0); }
+}
+
+/* Animations used across surfaces */
+@keyframes caret    { 50% { opacity: 0; } }
+@keyframes bar      { 0%,100% { transform: scaleY(0.6); } 50% { transform: scaleY(1.4); } }
+@keyframes bar3     { 0%,100% { transform: scaleY(0.5); } 50% { transform: scaleY(1.4); } }
+@keyframes halo     { 0%,100% { opacity: 0.55; transform: scale(1); } 50% { opacity: 1; transform: scale(1.05); } }
+@keyframes petspark { 0%,100% { box-shadow: 0 0 0 0 rgba(185,28,28,0.55); } 70% { box-shadow: 0 0 0 12px rgba(185,28,28,0); } }
+
+button { font-family: inherit; }
+
+/* ───────────────────────── Showroom shell ─────────────────────────
+   Not part of the product — the harness that lets you flip between the
+   three macOS surfaces of this static prototype. */
+
+.showroom {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(circle at 50% -10%, #f3ecdd 0%, var(--paper) 60%);
+}
+
+.showroom-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 22px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--vibrancy);
+  backdrop-filter: blur(20px) saturate(160%);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.brand .mark {
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  color: var(--ink);
+}
+.brand .name { font-family: var(--font-display); font-size: 20px; font-weight: 500; }
+.brand .tag  { color: var(--subtle); font-size: 11px; margin-left: 2px; }
+
+.tabs { display: flex; gap: 4px; margin-left: 8px; }
+.tab {
+  padding: 6px 14px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: var(--r-pill);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-quick) var(--ease), color var(--dur-quick) var(--ease);
+}
+.tab:hover { color: var(--ink); }
+.tab.active { background: var(--ink); color: var(--paper); }
+
+.bar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+
+/* contextual state segmented control */
+.states { display: none; align-items: center; gap: 6px; }
+.states.show { display: flex; }
+.states .lbl { font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--subtle); margin-right: 2px; }
+.state-pill {
+  padding: 4px 11px;
+  border: 1px solid var(--divider);
+  background: var(--card);
+  color: var(--muted);
+  border-radius: var(--r-pill);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.state-pill.active { background: var(--amber); border-color: var(--amber); color: var(--paper); }
+
+.repo-link { font-family: var(--font-mono); font-size: 11px; color: var(--subtle); text-decoration: none; }
+.repo-link:hover { color: var(--amber); }
+
+/* the stage holds one surface at its native macOS size */
+.stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  padding: 36px;
+}
+.surface { display: none; }
+.surface.active { display: block; }
+
+/* a rounded "screen slice" frame each surface lives in */
+.screen {
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow-pop);
+  position: relative;
+}
+
+/* per-surface desktop backgrounds (verbatim from the design) */
+.desk-win { background: radial-gradient(circle at 30% 20%, #f1e9dc 0%, #d6c9ad 80%), #d6c9ad; }
+.desk-mb  { background: radial-gradient(circle at 70% 30%, #f1e9dc 0%, #d6c9ad 80%), #d6c9ad; }
+.desk-pet { background: radial-gradient(circle at 30% 20%, #f1e9dc 0%, #e8dfcc 40%, #d6c9ad 80%), #d6c9ad; }
+
+/* macOS menu bar slice */
+.macbar {
+  height: 28px; padding: 0 14px;
+  background: rgba(28,25,23,0.18);
+  backdrop-filter: blur(20px) saturate(160%);
+  display: flex; align-items: center; gap: 18px;
+  color: #fffdf7; font-size: 12px;
+  border-bottom: 1px solid rgba(28,25,23,0.18);
+}
+.macbar .dim { opacity: 0.85; }
+.macbar .right { margin-left: auto; display: flex; align-items: center; gap: 14px; font-size: 11.5px; }
+.macbar .clock { font-variant-numeric: tabular-nums; opacity: 0.85; }
+.macbar .catmark {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px;
+  border-radius: 6px; background: rgba(250,246,239,0.28); position: relative;
+}
+.menu-dot {
+  position: absolute; top: 2px; right: 2px; width: 6px; height: 6px;
+  border-radius: 50%; background: var(--spark); box-shadow: 0 0 0 1.5px rgba(28,25,23,0.18);
+}
+
+/* film grain for the pet desktop */
+.grain {
+  position: absolute; inset: 0; pointer-events: none;
+  background-image: radial-gradient(rgba(255,255,255,0.4) 0.5px, transparent 0.6px);
+  background-size: 3px 3px; mix-blend-mode: overlay;
+}
+
+/* bubbles + evidence */
+.bubble-user {
+  max-width: 72%; padding: 9px 14px; align-self: flex-end;
+  background: var(--ink); color: var(--paper);
+  border-radius: 16px 16px 4px 16px; font-size: 14px; line-height: 1.5;
+}
+.bubble-catty {
+  max-width: 82%; padding: 10px 14px;
+  background: var(--card); color: var(--ink);
+  border-radius: 16px 16px 16px 4px; box-shadow: var(--shadow-card);
+  font-size: 14px; line-height: 1.55;
+}
+.evidence { margin-top: 6px; margin-left: 4px; display: flex; gap: 6px; flex-wrap: wrap; }
+.ev {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px 4px; background: var(--amber-tint);
+  color: var(--amber); border-radius: 6px; font-size: 11px; font-weight: 500;
+}
+.ev .src-dot { background: currentColor; }
+.ev .when { font-family: var(--font-mono); font-size: 10px; opacity: 0.7; }
+
+/* primary round mic / send button */
+.round-btn {
+  width: 30px; height: 30px; border-radius: 999px;
+  background: var(--amber); color: var(--paper);
+  border: none; display: grid; place-items: center; cursor: pointer;
+}
+.round-btn.sm { width: 28px; height: 28px; }
+
+/* speech bubble (desktop pet) */
+.speech {
+  position: relative; max-width: 280px; padding: 10px 14px 11px;
+  background: var(--card); color: var(--ink);
+  border-radius: 14px; box-shadow: var(--shadow-card), var(--shadow-hover);
+  font-size: 13px; line-height: 1.45;
+}
+.speech .tail { position: absolute; bottom: 10px; right: -6px; }
+
+/* waveform bar (built by JS) */
+.wave { display: flex; align-items: center; justify-content: center; }
+.wave .b { width: 3px; border-radius: 2px; background: var(--amber); opacity: 0.85; }
+
+.caret {
+  display: inline-block; width: 1.5px; height: 14px; background: var(--amber);
+  vertical-align: middle; margin-left: 1px; animation: caret 1s steps(2) infinite;
+}
+
+.kbd {
+  font-family: var(--font-mono); font-size: 10px; padding: 1px 6px;
+  background: var(--card-2); border-radius: 4px; color: var(--muted);
+}
+
+.surface-caption {
+  margin-top: 16px; text-align: center;
+  font-size: 11.5px; color: var(--muted); line-height: 1.5;
+}
+.surface-caption b { color: var(--ink); font-weight: 600; }

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. **2026-05-24 更新：产品定位已重构** —— 本仓库现为 **Catty**（实时、不断逼近你本人的"更好的我"agent）的记忆器官；产品本体见 [`catty-thesis.md`](catty-thesis.md)、首个切片见 [`catty-v0-plan.md`](catty-v0-plan.md)。本 ADR 对"记忆运行时"子系统所做的决策仍然有效。
 
 ## Context
 

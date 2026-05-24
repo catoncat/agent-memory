@@ -6,6 +6,8 @@
 
 Agent Memory is a **Memory Trail Runtime** designed to bridge the gap between raw computer usage and agentic intelligence. It observes your daily activities, consolidates them into meaningful "Dream" episodes, and provides explainable recall for AI agents.
 
+> **Note (2026-05-24):** This repo is the **memory organ** of a larger product — **Catty**, a real-time, ever-converging "better me" agent. See [`docs/catty-thesis.md`](docs/catty-thesis.md) for the product thesis and [`docs/catty-v0-plan.md`](docs/catty-v0-plan.md) for the first validation slice. What's described below is that memory organ.
+
 ---
 
 ## ✨ Features

@@ -4,6 +4,8 @@
 
 Agent Memory 是一个 **记忆轨迹运行时 (Memory Trail Runtime)**，旨在桥接原始电脑使用记录与 Agent 智能。它通过观察你的日常活动，将其整合为有意义的“梦境 (Dream)”片段，并为 AI Agent 提供可解释的回忆能力。
 
+> **更新 (2026-05-24)：** 本仓库是更大产品的**记忆器官**——**Catty**，一个实时、不断逼近你本人的"更好的我"agent。产品本体见 [`docs/catty-thesis.md`](docs/catty-thesis.md)，首个验证切片见 [`docs/catty-v0-plan.md`](docs/catty-v0-plan.md)。下面描述的是这个记忆器官本身。
+
 ---
 
 ## ✨ 特性
