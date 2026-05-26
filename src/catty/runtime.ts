@@ -3,6 +3,8 @@ import { predictNextStep } from "./predict";
 import { buildPredictionCase } from "./trail";
 import type { Brain, Judge, Judgement, PredictionContext, SelfHypothesis, TrailEvent } from "./types";
 
+export { SqliteCattyStore } from "./sqlite-store";
+
 export type PredictionBucket = "shadow" | "visible";
 
 export type CattyFeedback = {
@@ -73,7 +75,16 @@ export type DailyReport = {
 
 const EMPTY_MEMORY_AUDIT: MemoryAudit = { accepted: 0, rejected: 0, trialHeuristics: 0 };
 
-export class InMemoryCattyStore {
+export interface CattyStore {
+  addPrediction(input: Omit<PredictionRecord, "id">): PredictionRecord;
+  getPrediction(id: string): PredictionRecord | undefined;
+  listPredictions(): PredictionRecord[];
+  updatePrediction(id: string, patch: Partial<PredictionRecord>): PredictionRecord;
+  recordMemoryAudit(audit: MemoryAudit): void;
+  getMemoryAudit(): MemoryAudit;
+}
+
+export class InMemoryCattyStore implements CattyStore {
   private predictions: PredictionRecord[] = [];
   private memoryAudit: MemoryAudit = { ...EMPTY_MEMORY_AUDIT };
   private nextPredictionId = 1;
@@ -113,7 +124,7 @@ export class InMemoryCattyStore {
 export async function recordPrediction(input: {
   trail: TrailEvent[];
   brain: Brain;
-  store: InMemoryCattyStore;
+  store: CattyStore;
   bucket: PredictionBucket;
   now?: string;
 }): Promise<PredictionRecord> {
@@ -132,11 +143,26 @@ export async function recordPrediction(input: {
   });
 }
 
+export async function recordShadowPrediction(input: {
+  trail: TrailEvent[];
+  brain: Brain;
+  store: CattyStore;
+  now?: string;
+}): Promise<PredictionRecord> {
+  return recordPrediction({
+    trail: input.trail,
+    brain: input.brain,
+    store: input.store,
+    bucket: "shadow",
+    now: input.now,
+  });
+}
+
 export async function judgeRecordedPrediction(input: {
   recordId: string;
   actualTrail: TrailEvent[];
   judge: Judge;
-  store: InMemoryCattyStore;
+  store: CattyStore;
   feedback?: CattyFeedback;
 }): Promise<PredictionRecord> {
   const record = input.store.getPrediction(input.recordId);
@@ -162,7 +188,7 @@ export async function judgeRecordedPrediction(input: {
   });
 }
 
-export function generateDailyReport(store: InMemoryCattyStore, input: { date: string }): DailyReport {
+export function generateDailyReport(store: CattyStore, input: { date: string }): DailyReport {
   const records = store.listPredictions().filter((record) => record.createdAt.startsWith(input.date));
   const judged = records.filter((record) => record.judgement);
   const visible = records.filter((record) => record.wasVisible);
