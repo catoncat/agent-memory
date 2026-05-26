@@ -1,6 +1,6 @@
 import { judgeHypothesis } from "./judge";
 import { predictNextStep } from "./predict";
-import { buildPredictionCase } from "./trail";
+import { buildPredictionCase, buildPredictionContext } from "./trail";
 import type { Brain, Judge, Judgement, PredictionContext, SelfHypothesis, TrailEvent } from "./types";
 
 export { SqliteCattyStore } from "./sqlite-store";
@@ -155,6 +155,27 @@ export async function recordShadowPrediction(input: {
     store: input.store,
     bucket: "shadow",
     now: input.now,
+  });
+}
+
+export async function recordCurrentShadowPrediction(input: {
+  trail: TrailEvent[];
+  brain: Brain;
+  store: CattyStore;
+  now?: string;
+}): Promise<PredictionRecord> {
+  const predictionContext = buildPredictionContext(input.trail);
+  const context = {
+    ...predictionContext,
+    now: input.now ?? predictionContext.now,
+  };
+  const hypothesis = await predictNextStep(context, input.brain);
+  return input.store.addPrediction({
+    createdAt: context.now,
+    bucket: "shadow",
+    wasVisible: false,
+    context,
+    hypothesis,
   });
 }
 

@@ -10,6 +10,9 @@ predict.ts      buildPrompt（产品逻辑：怎么形成 self hypothesis）+ pr
 brain.ts        StubBrain（无模型、证明管道）/ PiBrain（真大脑，走 pi-ai + cliproxy）
 trail.ts        Spike B 的真实 raw_events 读取 + app/domain 边界触发
 judge.ts        Spike C 的独立 judge seam + intent-weighted rubric
+runtime.ts      record/judge/report/admission runtime seam + store port
+sqlite-store.ts bun:sqlite 持久化 catty_predictions / catty_memory_audit
+shadow.ts       手动记录当前 shadow prediction；默认 dry-run，显式 --write 才写库
 sample-trail.ts 录制的样本 trail（含一次 app/domain 切换 = 预判触发点）
 spike.ts        端到端跑一遍：在上下文切换处产出一条 self hypothesis
 ```
@@ -21,6 +24,9 @@ bun src/catty/spike.ts                    # StubBrain + sample trail：无需模
 bun src/catty/spike.ts --real             # StubBrain + 真实 raw_events：验证 Spike B 输入
 envchain mom bun src/catty/spike.ts --real --pi   # PiBrain + 真实 raw_events：真预判
 envchain mom bun src/catty/spike.ts --real --pi --judge   # PiBrain + PiJudge：预判后对照后续 trail 打分
+bun src/catty/shadow.ts                   # dry-run：读取真实 raw_events，不写库、不调模型
+bun src/catty/shadow.ts --write           # StubBrain：写一条 shadow prediction 到 events.sqlite
+envchain mom bun src/catty/shadow.ts --pi --write  # PiBrain：显式写真实模型 shadow prediction
 ```
 
 `--pi` 已接通 `@earendil-works/pi-ai`。它只从环境读取 cliproxy/OpenAI-compatible 配置：
@@ -30,9 +36,12 @@ envchain mom bun src/catty/spike.ts --real --pi --judge   # PiBrain + PiJudge：
 `--real` 默认读取 `~/.agents/memory/indexes/events.sqlite` 的最近 `observer.active_focus`
 事件；可用 `--db <path>` 和 `--limit <n>` 覆盖。
 
+`shadow.ts` 默认读取同一个 live events DB，并把 Catty 表写入 `--store-db`（默认同 `--db`）。
+它不接 launchd heartbeat；没有 `--write` 时只是 dry-run，不会创建 `catty_predictions`。
+
 ## 还没接的（下一步）
 
-- **Spike B hardening**：把真实 trail 触发从手动 CLI 变成可记录的 hypothesis event，保留 shadow / visible bucket。
+- **Spike B hardening**：把 shadow 手动写入扩成受控调度策略，仍保留 shadow / visible bucket。
 - **Spike C hardening**：把 judgement 写成可回放的记录，并让 shadow / visible bucket 进入评分统计。
 - **memory（Spike D）**：夜间反省写 user-prior memory；dogfood 占位。
 
